@@ -1,28 +1,199 @@
-# This workflow will build a golang project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
-
-name: Go
+name: Go CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main", "develop"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main", "develop"]
+
+env:
+  GO_VERSION: "1.27"
 
 jobs:
-
-  build:
+  # ──────────────────────────────────────────────
+  # Job 1: Lint semua service
+  # ──────────────────────────────────────────────
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
     steps:
-    - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.20'
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-    - name: Build
-      run: go build -v ./...
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: ${{ matrix.service }}
+          args: --timeout=5m
 
-    - name: Test
-      run: go test -v ./...
+  # ──────────────────────────────────────────────
+  # Job 2: Vet & staticcheck (cek sintaks + style)
+  # ──────────────────────────────────────────────
+  vet:
+    name: Vet & Staticcheck
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+        working-directory: ${{ matrix.service }}
+
+      - name: Run go vet
+        run: go vet ./...
+        working-directory: ${{ matrix.service }}
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+      - name: Run staticcheck
+        run: staticcheck ./...
+        working-directory: ${{ matrix.service }}
+
+  # ──────────────────────────────────────────────
+  # Job 3: Build semua service
+  # ──────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, vet]
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+        working-directory: ${{ matrix.service }}
+
+      - name: Verify go.sum
+        run: go mod verify
+        working-directory: ${{ matrix.service }}
+
+      - name: Build
+        run: go build -v -o /dev/null ./...
+        working-directory: ${{ matrix.service }}
+
+  # ──────────────────────────────────────────────
+  # Job 4: Test semua service
+  # ──────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [lint, vet]
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download dependencies
+        run: go mod download
+        working-directory: ${{ matrix.service }}
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+        working-directory: ${{ matrix.service }}
+
+      - name: Upload coverage
+        if: matrix.service == 'auth-service'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.service }}
+          path: ${{ matrix.service }}/coverage.out
+
+  # ──────────────────────────────────────────────
+  # Job 5: Tidy check (pastikan go.mod bersih)
+  # ──────────────────────────────────────────────
+  tidy:
+    name: Go Mod Tidy
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Check go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || (echo "❌ go.mod or go.sum is not tidy. Run 'go mod tidy' locally." && exit 1)
+        working-directory: ${{ matrix.service }}
+
+  # ──────────────────────────────────────────────
+  # Job 6: Docker build (opsional, hanya di main)
+  # ──────────────────────────────────────────────
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    strategy:
+      matrix:
+        service:
+          - auth-service
+          - catalog-service
+          - payment-service
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ matrix.service }}:${{ github.sha }} -f ${{ matrix.service }}/DockerFile .
+        working-directory: .
