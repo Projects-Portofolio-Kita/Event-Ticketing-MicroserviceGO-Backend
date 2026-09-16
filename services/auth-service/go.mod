@@ -1,4 +1,4 @@
-module github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/auth-service
+module github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/auth-service
 
 go 1.27
 
