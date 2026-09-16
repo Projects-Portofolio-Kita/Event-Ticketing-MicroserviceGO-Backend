@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -8,12 +9,12 @@ import (
 
 func main() {
 	router := gin.Default()
-
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"status":  "ok",
-			"service": "catalog-service",
+			"service": "auth-service",
 		})
 	})
-	router.Run(":8803")
+	log.Println("Auth Service running on :8081")
+	router.Run(":8081")
 }
