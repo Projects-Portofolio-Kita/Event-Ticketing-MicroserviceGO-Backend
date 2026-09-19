@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: tiketid
+      POSTGRES_DB: event_ticketing_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: DockerFile
+    container_name: auth-service
+    ports:
+      - "8081:8081"
+    environment:
+      SERVER_PORT: "8081"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  catalog-service:
+    build:
+      context: ./services/catalog-service
+      dockerfile: DockerFile
+    container_name: catalog-service
+    ports:
+      - "8082:8082"
+    environment:
+      SERVER_PORT: "8082"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  booking-service:
+    build:
+      context: ./services/booking-service
+      dockerfile: DockerFile
+    container_name: booking-service
+    ports:
+      - "8083:8083"
+    environment:
+      SERVER_PORT: "8083"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      REDIS_URL: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+
+  payment-service:
+    build:
+      context: ./services/payment-service
+      dockerfile: DockerFile
+    container_name: payment-service
+    ports:
+      - "8084:8084"
+    environment:
+      SERVER_PORT: "8084"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
