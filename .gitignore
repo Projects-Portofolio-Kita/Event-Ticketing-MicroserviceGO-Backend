@@ -1,0 +1,25 @@
+# Environment variables
+.env
+*.env
+!.env.example
+
+# Binaries and executables
+*.exe
+/server
+server
+bin/
+dist/
+
+# Test and coverage artifacts
+coverage.out
+*.test
+*.prof
+
+# IDE and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local backup
+.git_backup/
