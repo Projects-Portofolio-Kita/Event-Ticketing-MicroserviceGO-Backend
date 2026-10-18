@@ -13,17 +13,17 @@ The **TickId Notification Service** is a zero-cost, high-performance transaction
 
 1. [Architecture Overview](#architecture-overview)
 2. [Project Layout](#project-layout)
-3. [Zero-Cost Free Tier Guarantee](#zero-cost-free-tier-guarantee)
-4. [Free Gmail App Password Setup (9 Steps)](#free-gmail-app-password-setup-9-steps)
-5. [Local Development with Mailpit](#local-development-with-mailpit)
-6. [API Endpoints Reference](#api-endpoints-reference)
+3. [Zero-Cost Free Delivery Options](#zero-cost-free-delivery-options)
+   - [Option A: Local Development with Mailpit (Zero Setup, 100% Free)](#option-a-local-development-with-mailpit-zero-setup-100-free)
+   - [Option B: Real Email Delivery via Free Gmail SMTP (Google App Password)](#option-b-real-email-delivery-via-free-gmail-smtp-google-app-password)
+4. [API Endpoints Reference](#api-endpoints-reference)
    - [1. Ticket Confirmation & PDF E-Ticket](#1-ticket-confirmation--pdf-e-ticket)
    - [2. Payment Failed / Reservation Expired](#2-payment-failed--reservation-expired)
    - [3. Send Custom / Broadcast Email](#3-send-custom--broadcast-email)
    - [4. Operational Health Check](#4-operational-health-check)
-7. [Environment Variables Reference](#environment-variables-reference)
-8. [Testing & Verification](#testing--verification)
-9. [Building and Running the Service](#building-and-running-the-service)
+5. [Environment Variables Reference](#environment-variables-reference)
+6. [Testing & Verification](#testing--verification)
+7. [Building and Running the Service](#building-and-running-the-service)
 
 ---
 
@@ -121,42 +121,82 @@ d:\KODINGANNN\TickId\backend\services\notification-service\
 
 ---
 
-## Zero-Cost Free Tier Guarantee
+## Zero-Cost Free Delivery Options
 
-The TickId Notification Service does **not** require paid third-party email APIs (SendGrid, Mailgun, Amazon SES). Instead, it operates at **$0 recurring cost**:
+The TickId Notification Service does **not** require paid third-party email APIs (SendGrid, Mailgun, Amazon SES). Instead, it operates at **$0 recurring cost** using two primary delivery options:
 
-1. **Free Personal Gmail (Production/Staging)**: A standard personal Google account provides up to **500 emails/day** free of charge using a 16-character Google App Password.
-2. **Mailpit / MailHog (Local Development)**: A zero-dependency local container capturing all outbound emails with an interactive web UI.
-3. **In-Memory Mock SMTP (Automated Testing)**: Standard library TCP listener running on ephemeral ports (`127.0.0.1:0`) executing 100% offline tests without an internet connection.
+| Option | Ideal For | Key Benefit | Setup Time |
+|---|---|---|---|
+| **[Option A: Mailpit](#option-a-local-development-with-mailpit-zero-setup-100-free)** | Local development & offline testing | Zero credentials, web UI inspector at `localhost:8025` | Instant (< 1 min) |
+| **[Option B: Gmail SMTP](#option-b-real-email-delivery-via-free-gmail-smtp-google-app-password)** | Staging, QA, and real customer emails | Sends real emails directly to inboxes (500 free/day) | 2 minutes |
 
 ---
 
-## Free Gmail App Password Setup (9 Steps)
+### Option A: Local Development with Mailpit (Zero Setup, 100% Free)
 
-Follow this 9-step tutorial to configure transactional email sending using any personal Google Account:
+Mailpit captures all outgoing emails locally inside Docker without sending anything over the internet. You can view rendered HTML emails and download generated PDF E-Tickets in real time via a web interface.
 
-1. **Log In to Google Account**: Navigate to [https://myaccount.google.com/](https://myaccount.google.com/) and sign in with your Gmail credentials.
-2. **Navigate to Security**: In the left-hand navigation menu, click **Security** (Keamanan).
-3. **Verify 2-Step Verification**: Under the section **"How you sign in to Google"** (Cara Anda login ke Google), confirm that **2-Step Verification** (Verifikasi 2 Langkah) is turned **ON**.
-   > *Note*: Google requires 2-Step Verification before allowing App Passwords. If it is currently OFF, click it and follow the on-screen steps to enable SMS or Authenticator app verification.
-4. **Open App Passwords**: Click on **2-Step Verification** and scroll down to the bottom of the page to find **App passwords** (Sandi aplikasi).
-   - Direct link: [https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
-   - Alternatively, search `"App Passwords"` in the top search bar.
-5. **Verify Password**: When prompted, re-enter your Google account password.
-6. **Name the Application**: In the **App name** input field, type:
+#### 1. Start Mailpit via Docker
+Using Docker Compose from `backend/`:
+```bash
+docker compose up -d mailpit
+```
+Or standalone:
+```bash
+docker run -d --name tickid-mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit:latest
+```
+
+#### 2. Configure `.env` for Mailpit
+Create or update `.env` in `services/notification-service/`:
+```env
+SERVER_PORT=8085
+WORKER_COUNT=5
+QUEUE_CAPACITY=500
+
+SMTP_HOST=localhost
+SMTP_PORT=1025
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=noreply@tickid.com
+SMTP_FROM_NAME=TickId Local Dev
+SMTP_USE_TLS=false
+```
+
+#### 3. Inspect Outgoing Emails in Browser
+Open **[http://localhost:8025](http://localhost:8025)** to view sent emails, inspect headers, check responsive layouts, and download the attached PDF E-Tickets.
+
+---
+
+### Option B: Real Email Delivery via Free Gmail SMTP (Google App Password)
+
+Google provides **up to 500 free transactional emails per day** for personal Gmail accounts via standard SMTP using an App Password (no credit card or paid subscription needed).
+
+#### 9-Step Tutorial: Generating Your Free Google App Password
+
+1. **Log In to Google Account**: Navigate to [https://myaccount.google.com/](https://myaccount.google.com/) and sign in.
+2. **Navigate to Security**: In the left menu, select **Security** (Keamanan).
+3. **Verify 2-Step Verification**: Under **"How you sign in to Google"**, confirm **2-Step Verification** is turned **ON**.
+   > *Note*: Google requires 2-Step Verification before allowing App Passwords. If it is OFF, click it and follow the prompts to enable SMS or Authenticator verification.
+4. **Open App Passwords**: Click **2-Step Verification** and scroll down to the bottom to find **App passwords** (Sandi aplikasi), or visit direct link: [https://myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).
+5. **Verify Identity**: Enter your Google account password when prompted.
+6. **Name the App**: In the **App name** field, type:
    ```
    TickId Notification Service
    ```
 7. **Generate Password**: Click **Create** (Buat).
-8. **Copy the 16-Character Password**: A pop-up modal will display a 16-character yellow-highlighted password formatted in 4 blocks of 4 characters:
+8. **Copy the 16-Character Password**: A dialog will display a 16-character yellow-highlighted password:
    ```
    abcd efgh ijkl mnop
    ```
-   - **Immediately copy this password**.
-   - Strip the spaces so it forms a continuous 16-character string: `abcdefghijklmnop`.
-   - *Important*: Google will **never** display this password again after clicking "Done".
-9. **Configure `.env`**: Copy `.env.example` to `.env` and set:
+   - Copy it immediately and remove the spaces: `abcdefghijklmnop`.
+   - *Note*: Google will never display this password again after clicking "Done".
+9. **Configure `.env` for Gmail**:
+   Create or update `.env` in `services/notification-service/`:
    ```env
+   SERVER_PORT=8085
+   WORKER_COUNT=5
+   QUEUE_CAPACITY=500
+
    SMTP_HOST=smtp.gmail.com
    SMTP_PORT=587
    SMTP_USER=your-email@gmail.com
@@ -165,34 +205,6 @@ Follow this 9-step tutorial to configure transactional email sending using any p
    SMTP_FROM_NAME=TickId Official
    SMTP_USE_TLS=true
    ```
-
----
-
-## Local Development with Mailpit
-
-For visual inspection of HTML templates and PDF attachments without sending real emails over the internet:
-
-1. **Start Mailpit via Docker**:
-   ```bash
-   docker run -d --name tickid-mailpit -p 1025:1025 -p 8025:8025 axllent/mailpit
-   ```
-
-2. **Configure `.env` for Mailpit**:
-   ```env
-   SMTP_HOST=localhost
-   SMTP_PORT=1025
-   SMTP_USER=
-   SMTP_PASS=
-   SMTP_FROM=noreply@tickid.com
-   SMTP_FROM_NAME=TickId Dev
-   SMTP_USE_TLS=false
-   ```
-
-3. **View Captured Emails**: Open your browser and navigate to:
-   ```
-   http://localhost:8025
-   ```
-   You can inspect HTML formatting, plain-text fallback, headers, and download attached E-Ticket PDFs.
 
 ---
 
