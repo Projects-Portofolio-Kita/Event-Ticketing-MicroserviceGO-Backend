@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/health"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/httperr"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/auth-service/internal/handler"
 	authjwt "github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/auth-service/internal/jwt"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/auth-service/internal/middleware"
@@ -58,6 +60,12 @@ func main() {
 	router.Use(cors.New())
 
 	health.Register(router, "auth-service")
+
+	// Unknown routes answer with the standard JSON envelope instead of gin's
+	// plain-text 404.
+	router.NoRoute(func(c *gin.Context) {
+		httperr.JSON(c, http.StatusNotFound, "route tidak ditemukan")
+	})
 
 	api := router.Group("/api/v1/auth")
 	{

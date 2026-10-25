@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 )
 
 type SeatStatus struct {
@@ -18,8 +20,9 @@ type BookingClient interface {
 }
 
 type HTTPBookingClient struct {
-	baseURL string
-	http    *http.Client
+	baseURL      string
+	serviceToken string
+	http         *http.Client
 }
 
 func NewHTTPBookingClient() *HTTPBookingClient {
@@ -29,15 +32,27 @@ func NewHTTPBookingClient() *HTTPBookingClient {
 	}
 
 	return &HTTPBookingClient{
-		baseURL: baseURL,
-		http:    &http.Client{Timeout: 3 * time.Second},
+		baseURL:      baseURL,
+		serviceToken: os.Getenv("SERVICE_TOKEN"),
+		http:         &http.Client{Timeout: 3 * time.Second},
 	}
 }
 
+// GetSeatStatus reads booking-service's live availability feed. The feed is
+// only reachable with X-Service-Token: without it every call would fail and
+// seatmap would silently report every seat as available.
 func (c *HTTPBookingClient) GetSeatStatus(eventID string) ([]SeatStatus, error) {
 	url := fmt.Sprintf("%s/api/v1/events/%s/seat-status", c.baseURL, eventID)
 
-	response, err := c.http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.serviceToken != "" {
+		req.Header.Set(authz.ServiceHeader, c.serviceToken)
+	}
+
+	response, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("booking-service unreachable: %w", err)
 	}

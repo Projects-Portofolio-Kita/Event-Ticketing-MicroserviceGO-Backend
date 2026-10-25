@@ -43,6 +43,8 @@ services:
       SERVER_PORT: "8082"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
       BOOKING_SERVICE_URL: "http://booking-service:8083"
+      # Lets catalog call booking-service's seat-status feed (X-Service-Token).
+      SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +62,11 @@ services:
     environment:
       SERVER_PORT: "8083"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      # Same HS256 secret as auth-service so every access token verifies here.
+      # Production MUST override both (openssl rand -hex 32).
+      JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
+      # Lets payment-service confirm a reservation (X-Service-Token).
+      SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
       # Empty disables notifications (fire-and-forget, never blocks a booking).
       NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
     depends_on:
@@ -81,6 +88,11 @@ services:
     environment:
       SERVER_PORT: "8084"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      # Same HS256 secret as auth-service so every access token verifies here.
+      # Production MUST override both (openssl rand -hex 32).
+      JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
+      # Calls booking-service (read + confirm) as an internal service.
+      SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
       BOOKING_SERVICE_URL: "http://booking-service:8083"
       NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
     depends_on:
@@ -102,6 +114,12 @@ services:
     environment:
       SERVER_PORT: "8085"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      # Reads list/mark-read requests, so it verifies the same access tokens
+      # auth-service issues. Production MUST override (openssl rand -hex 32).
+      JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
+      # Booking/payment post notifications with this (X-Service-Token). It is
+      # deliberately absent from the gateway: the public internet cannot post.
+      SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
     depends_on:
       postgres:
         condition: service_healthy

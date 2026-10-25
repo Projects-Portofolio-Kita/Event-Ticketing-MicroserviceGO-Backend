@@ -2,10 +2,13 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/health"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/httperr"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/handler"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/model"
@@ -17,6 +20,11 @@ import (
 )
 
 func main() {
+	// Fail fast: payment owns user data and calls booking-service, so it must
+	// never come up without the credentials it needs.
+	jwtSecret := authz.RequireEnv("JWT_SECRET")
+	serviceToken := authz.RequireEnv("SERVICE_TOKEN")
+
 	db, err := database.NewConnection()
 	if err != nil {
 		log.Fatal(err)
@@ -46,11 +54,22 @@ func main() {
 
 	health.Register(router, "payment-service")
 
+	// Unknown routes answer with the standard JSON envelope instead of gin's
+	// plain-text 404.
+	router.NoRoute(func(c *gin.Context) {
+		httperr.JSON(c, http.StatusNotFound, "route tidak ditemukan")
+	})
+
+	requireUser := authz.RequireUser(jwtSecret)
+	requireUserOrService := authz.RequireUserOrService(jwtSecret, serviceToken)
+
 	api := router.Group("/api/v1")
 	{
-		api.POST("/payments", paymentHandler.CreatePayment)
-		api.GET("/payments/:id", paymentHandler.GetPayment)
-		api.POST("/payments/:id/confirm", paymentHandler.ConfirmPayment)
+		// Every payment operation acts on the caller's own account: the
+		// service checks the reservation/payment against the token's subject.
+		api.POST("/payments", requireUser, paymentHandler.CreatePayment)
+		api.GET("/payments/:id", requireUserOrService, paymentHandler.GetPayment)
+		api.POST("/payments/:id/confirm", requireUser, paymentHandler.ConfirmPayment)
 	}
 
 	port := os.Getenv("SERVER_PORT")

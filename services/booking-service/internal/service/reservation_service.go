@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/dto"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/model"
@@ -18,18 +19,41 @@ const reservationTTL = 5 * time.Minute
 var (
 	ErrSeatsUnavailable = errors.New("beberapa kursi yang dipilih sedang di-lock atau sudah terjual")
 	ErrInvalidInput     = errors.New("invalid input")
+	ErrForbidden        = errors.New("Anda tidak punya akses ke reservasi ini.")
 )
 
+// reservationStore is the slice of the repository this service depends on.
+// Keeping it an interface lets tests substitute an in-memory fake.
+type reservationStore interface {
+	Create(reservation *model.Reservation) error
+	FindByID(id uuid.UUID) (*model.Reservation, error)
+	Update(reservation *model.Reservation) error
+	FindConflictingSeats(seatIDs []uuid.UUID) ([]uuid.UUID, error)
+	FindSeatStatusByEvent(eventID uuid.UUID) ([]repository.SeatStatus, error)
+}
+
 type ReservationService struct {
-	repository *repository.ReservationRepository
+	repository reservationStore
 	notifier   notify.Notifier
 }
 
-func NewReservationService(repository *repository.ReservationRepository, notifier notify.Notifier) *ReservationService {
+func NewReservationService(repository reservationStore, notifier notify.Notifier) *ReservationService {
 	if notifier == nil {
 		notifier = notify.Noop()
 	}
 	return &ReservationService{repository: repository, notifier: notifier}
+}
+
+// ensureOwnership rejects a non-internal caller that is not the owner of the
+// given user id. This is the only gate between two users' data.
+func ensureOwnership(caller authz.Caller, owner uuid.UUID) error {
+	if caller.Internal {
+		return nil
+	}
+	if caller.UserID == "" || caller.UserID != owner.String() {
+		return ErrForbidden
+	}
+	return nil
 }
 
 // emit sends a user-facing notification; never affects the business result.
@@ -37,8 +61,10 @@ func (s *ReservationService) emit(msg notify.Message) {
 	s.notifier.Send(msg)
 }
 
-func (s *ReservationService) CreateReservation(req *dto.CreateReservationRequest) (*model.Reservation, error) {
-	userID, err := uuid.Parse(req.UserID)
+// CreateReservation locks seats for the authenticated user. The userId in the
+// body is ignored: identity comes from the verified access token (caller).
+func (s *ReservationService) CreateReservation(req *dto.CreateReservationRequest, caller authz.Caller) (*model.Reservation, error) {
+	userID, err := uuid.Parse(caller.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: userId", ErrInvalidInput)
 	}
@@ -113,13 +139,22 @@ func (s *ReservationService) CreateReservation(req *dto.CreateReservationRequest
 	return reservation, nil
 }
 
-func (s *ReservationService) GetReservation(id string) (*model.Reservation, error) {
+func (s *ReservationService) GetReservation(id string, caller authz.Caller) (*model.Reservation, error) {
 	reservationID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid reservation id", ErrInvalidInput)
 	}
 
-	return s.repository.FindByID(reservationID)
+	reservation, err := s.repository.FindByID(reservationID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := ensureOwnership(caller, reservation.UserID); err != nil {
+		return nil, err
+	}
+
+	return reservation, nil
 }
 
 func (s *ReservationService) GetSeatStatus(eventID string) ([]repository.SeatStatus, error) {
@@ -131,7 +166,7 @@ func (s *ReservationService) GetSeatStatus(eventID string) ([]repository.SeatSta
 	return s.repository.FindSeatStatusByEvent(id)
 }
 
-func (s *ReservationService) ConfirmReservation(id string) (*model.Reservation, error) {
+func (s *ReservationService) ConfirmReservation(id string, caller authz.Caller) (*model.Reservation, error) {
 	reservationID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid reservation id", ErrInvalidInput)
@@ -139,6 +174,10 @@ func (s *ReservationService) ConfirmReservation(id string) (*model.Reservation, 
 
 	reservation, err := s.repository.FindByID(reservationID)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := ensureOwnership(caller, reservation.UserID); err != nil {
 		return nil, err
 	}
 
@@ -168,7 +207,7 @@ func (s *ReservationService) ConfirmReservation(id string) (*model.Reservation, 
 	return reservation, nil
 }
 
-func (s *ReservationService) CancelReservation(id string) (*model.Reservation, error) {
+func (s *ReservationService) CancelReservation(id string, caller authz.Caller) (*model.Reservation, error) {
 	reservationID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid reservation id", ErrInvalidInput)
@@ -176,6 +215,10 @@ func (s *ReservationService) CancelReservation(id string) (*model.Reservation, e
 
 	reservation, err := s.repository.FindByID(reservationID)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := ensureOwnership(caller, reservation.UserID); err != nil {
 		return nil, err
 	}
 

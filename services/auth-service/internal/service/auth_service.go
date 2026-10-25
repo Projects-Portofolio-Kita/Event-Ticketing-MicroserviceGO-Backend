@@ -24,14 +24,27 @@ var (
 	ErrGoogleTokenInvalid  = errors.New("google token is invalid")
 )
 
+// userStore is the consumer-side slice of repository.UserRepository that the
+// service actually uses. Depending on this narrow interface keeps the service
+// testable with an in-memory fake; *repository.UserRepository satisfies it.
+type userStore interface {
+	CreateUser(user *model.User) error
+	FindByEmail(email string) (*model.User, error)
+	FindByID(id uuid.UUID) (*model.User, error)
+	FindByGoogleSub(sub string) (*model.User, error)
+	SaveRefreshToken(userID uuid.UUID, tokenHash string, expiresAt time.Time) error
+	FindValidRefreshToken(tokenHash string) (*model.RefreshToken, error)
+	RevokeRefreshToken(id uuid.UUID) error
+}
+
 type AuthService struct {
-	repo             *repository.UserRepository
+	repo             userStore
 	jwt              *authjwt.Manager
 	googleClientID   string
 	googleHTTPClient *http.Client
 }
 
-func NewAuthService(repo *repository.UserRepository, jwt *authjwt.Manager, googleClientID string) *AuthService {
+func NewAuthService(repo userStore, jwt *authjwt.Manager, googleClientID string) *AuthService {
 	return &AuthService{
 		repo:             repo,
 		jwt:              jwt,

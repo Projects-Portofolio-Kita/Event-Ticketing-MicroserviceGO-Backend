@@ -5,8 +5,10 @@
 // own HTTP client, they call this one. A notification is never allowed to
 // break the business flow: failures are logged and swallowed.
 //
-// Configuration: NOTIFICATION_SERVICE_URL (e.g. http://notification-service:8085).
-// When unset, Send is a no-op, so services still work without the service.
+// Configuration: NOTIFICATION_SERVICE_URL (e.g. http://notification-service:8085)
+// and SERVICE_TOKEN, the internal credential notification-service expects on
+// POST (see libs/common/authz). When the URL is unset, Send is a no-op, so
+// services still work without it.
 package notify
 
 import (
@@ -15,7 +17,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
+
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 )
 
 // Kinds emitted by the services. Keep in sync with contracts/events.
@@ -40,24 +45,26 @@ type Notifier interface {
 	Send(Message)
 }
 
-// New reads NOTIFICATION_SERVICE_URL and returns a Notifier.
+// New reads NOTIFICATION_SERVICE_URL and SERVICE_TOKEN and returns a Notifier.
 // An unset URL yields a no-op Notifier.
 func New() Notifier {
-	return NewWithBaseURL(os.Getenv("NOTIFICATION_SERVICE_URL"))
+	return NewWithBaseURL(os.Getenv("NOTIFICATION_SERVICE_URL"), os.Getenv("SERVICE_TOKEN"))
 }
 
 // Noop returns a Notifier that discards every message. Useful as a fallback
 // when a caller was not given one.
 func Noop() Notifier { return noop{} }
 
-// NewWithBaseURL is New with an explicit base URL; empty URL disables sending.
-func NewWithBaseURL(baseURL string) Notifier {
+// NewWithBaseURL is New with explicit settings; an empty URL disables sending
+// and an empty serviceToken simply omits the internal header.
+func NewWithBaseURL(baseURL, serviceToken string) Notifier {
 	if baseURL == "" {
 		return noop{}
 	}
 	return &httpNotifier{
-		baseURL: baseURL,
-		client:  &http.Client{Timeout: 3 * time.Second},
+		baseURL:      baseURL,
+		serviceToken: serviceToken,
+		client:       &http.Client{Timeout: 3 * time.Second},
 	}
 }
 
@@ -66,8 +73,9 @@ type noop struct{}
 func (noop) Send(Message) {}
 
 type httpNotifier struct {
-	baseURL string
-	client  *http.Client
+	baseURL      string
+	serviceToken string
+	client       *http.Client
 }
 
 func (n *httpNotifier) Send(msg Message) {
@@ -77,11 +85,21 @@ func (n *httpNotifier) Send(msg Message) {
 		return
 	}
 
-	resp, err := n.client.Post(
-		n.baseURL+"/api/v1/notifications",
-		"application/json",
+	req, err := http.NewRequest(
+		http.MethodPost,
+		strings.TrimRight(n.baseURL, "/")+"/api/v1/notifications",
 		bytes.NewReader(payload),
 	)
+	if err != nil {
+		log.Printf("notify: build request %s: %v", msg.Kind, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if n.serviceToken != "" {
+		req.Header.Set(authz.ServiceHeader, n.serviceToken)
+	}
+
+	resp, err := n.client.Do(req)
 	if err != nil {
 		log.Printf("notify: %s failed: %v", msg.Kind, err)
 		return

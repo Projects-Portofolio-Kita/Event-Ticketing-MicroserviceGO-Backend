@@ -6,13 +6,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/dto"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/model"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/provider"
-	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/repository"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+)
+
+var (
+	ErrForbidden           = errors.New("Anda tidak punya akses ke pembayaran ini.")
+	ErrInvalidInput        = errors.New("invalid input")
+	ErrReservationNotFound = errors.New("reservasi tidak ditemukan")
 )
 
 type Reservation struct {
@@ -29,14 +35,23 @@ type BookingClient interface {
 	ConfirmReservation(reservationID uuid.UUID) error
 }
 
+// paymentStore is the slice of the repository this service depends on.
+// Keeping it an interface lets tests substitute an in-memory fake.
+type paymentStore interface {
+	Create(payment *model.Payment) error
+	FindByID(id uuid.UUID) (*model.Payment, error)
+	FindByReservationID(reservationID uuid.UUID) (*model.Payment, error)
+	Update(payment *model.Payment) error
+}
+
 type PaymentService struct {
-	repository   *repository.PaymentRepository
+	repository   paymentStore
 	qrisProvider *provider.MockQRISProvider
 	booking      BookingClient
 	notifier     notify.Notifier
 }
 
-func NewPaymentService(repository *repository.PaymentRepository, qrisProvider *provider.MockQRISProvider, booking BookingClient, notifier notify.Notifier) *PaymentService {
+func NewPaymentService(repository paymentStore, qrisProvider *provider.MockQRISProvider, booking BookingClient, notifier notify.Notifier) *PaymentService {
 	if notifier == nil {
 		notifier = notify.Noop()
 	}
@@ -48,18 +63,30 @@ func NewPaymentService(repository *repository.PaymentRepository, qrisProvider *p
 	}
 }
 
-func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Payment, error) {
+// ensureOwnership rejects a non-internal caller that is not the owner of the
+// given user id. This is the only gate between two users' payments.
+func ensureOwnership(caller authz.Caller, owner uuid.UUID) error {
+	if caller.Internal {
+		return nil
+	}
+	if caller.UserID == "" || caller.UserID != owner.String() {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest, caller authz.Caller) (*model.Payment, error) {
 
 	reservationID, err := uuid.Parse(req.ReservationID)
 	if err != nil {
-		return nil, errors.New("invalid reservation ID")
+		return nil, fmt.Errorf("%w: reservation id", ErrInvalidInput)
 	}
 	if reservationID == uuid.Nil {
-		return nil, errors.New("invalid reservation ID")
+		return nil, fmt.Errorf("%w: reservation id", ErrInvalidInput)
 	}
 
 	if strings.ToUpper(req.PaymentMethod) != "QRIS" {
-		return nil, errors.New("unsupported payment method and must be QRIS")
+		return nil, fmt.Errorf("%w: metode pembayaran harus QRIS", ErrInvalidInput)
 	}
 
 	reservation, err := s.booking.GetReservation(reservationID)
@@ -67,12 +94,18 @@ func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Pa
 		return nil, err
 	}
 
+	// The reservation belongs to whoever holds its token: a caller may only
+	// pay for their own reservation.
+	if err := ensureOwnership(caller, reservation.UserID); err != nil {
+		return nil, err
+	}
+
 	if reservation.Status != "LOCKED" {
-		return nil, errors.New("reservation is not in a valid state for payment")
+		return nil, fmt.Errorf("%w: reservasi tidak dalam status LOCKED", ErrInvalidInput)
 	}
 
 	if time.Now().After(reservation.ExpiredAt) {
-		return nil, errors.New("reservation has expired")
+		return nil, fmt.Errorf("%w: reservasi sudah kedaluwarsa", ErrInvalidInput)
 	}
 
 	existingPayment, err := s.repository.FindByReservationID(reservationID)
@@ -117,23 +150,36 @@ func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Pa
 	return payment, nil
 }
 
-func (s *PaymentService) GetPayment(id string) (*model.Payment, error) {
+func (s *PaymentService) GetPayment(id string, caller authz.Caller) (*model.Payment, error) {
 	paymentID, err := uuid.Parse(id)
 	if err != nil {
-		return nil, errors.New("invalid payment id")
-	}
-
-	return s.repository.FindByID(paymentID)
-}
-
-func (s *PaymentService) ConfirmPayment(id string) (*model.Payment, error) {
-	paymentID, err := uuid.Parse(id)
-	if err != nil {
-		return nil, errors.New("invalid payment id")
+		return nil, fmt.Errorf("%w: payment id", ErrInvalidInput)
 	}
 
 	payment, err := s.repository.FindByID(paymentID)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := ensureOwnership(caller, payment.UserID); err != nil {
+		return nil, err
+	}
+
+	return payment, nil
+}
+
+func (s *PaymentService) ConfirmPayment(id string, caller authz.Caller) (*model.Payment, error) {
+	paymentID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: payment id", ErrInvalidInput)
+	}
+
+	payment, err := s.repository.FindByID(paymentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := ensureOwnership(caller, payment.UserID); err != nil {
 		return nil, err
 	}
 
@@ -142,13 +188,13 @@ func (s *PaymentService) ConfirmPayment(id string) (*model.Payment, error) {
 	}
 
 	if payment.Status != model.PaymentPending {
-		return nil, errors.New("payment is not in a pending state")
+		return nil, fmt.Errorf("%w: pembayaran tidak dalam status PENDING", ErrInvalidInput)
 	}
 
 	if time.Now().After(payment.ExpiredAt) {
 		payment.Status = model.PaymentExpired
 		_ = s.repository.Update(payment)
-		return nil, errors.New("payment has expired")
+		return nil, fmt.Errorf("%w: pembayaran sudah kedaluwarsa", ErrInvalidInput)
 	}
 
 	if err := s.booking.ConfirmReservation(payment.ReservationID); err != nil {

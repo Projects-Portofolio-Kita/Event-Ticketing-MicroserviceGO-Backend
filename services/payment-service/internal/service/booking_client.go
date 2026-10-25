@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/google/uuid"
 )
 
@@ -21,8 +22,9 @@ type bookingReservationDTO struct {
 }
 
 type HTTPBookingClient struct {
-	baseURL string
-	http    *http.Client
+	baseURL      string
+	serviceToken string
+	http         *http.Client
 }
 
 func NewHTTPBookingClient() *HTTPBookingClient {
@@ -32,26 +34,47 @@ func NewHTTPBookingClient() *HTTPBookingClient {
 	}
 
 	return &HTTPBookingClient{
-		baseURL: baseURL,
-		http:    &http.Client{Timeout: 5 * time.Second},
+		baseURL:      baseURL,
+		serviceToken: os.Getenv("SERVICE_TOKEN"),
+		http:         &http.Client{Timeout: 5 * time.Second},
 	}
+}
+
+// request builds an outgoing call to booking-service. Those endpoints accept
+// either a user token or X-Service-Token; this is a service-to-service call,
+// so it identifies the *service*, never a user — ownership of the reservation
+// is verified against the caller's own identity before payment proceeds.
+func (c *HTTPBookingClient) request(method, url string) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.serviceToken != "" {
+		req.Header.Set(authz.ServiceHeader, c.serviceToken)
+	}
+	return req, nil
 }
 
 func (c *HTTPBookingClient) GetReservation(reservationID uuid.UUID) (*Reservation, error) {
 	if reservationID == uuid.Nil {
-		return nil, errors.New("invalid reservation ID")
+		return nil, fmt.Errorf("%w: reservation id", ErrInvalidInput)
 	}
 
 	url := fmt.Sprintf("%s/api/v1/reservations/%s", c.baseURL, reservationID.String())
 
-	response, err := c.http.Get(url)
+	req, err := c.request(http.MethodGet, url)
+	if err != nil {
+		return nil, err
+	}
+
+	response, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("booking-service unreachable: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode == http.StatusNotFound {
-		return nil, errors.New("reservation not found in booking-service")
+		return nil, ErrReservationNotFound
 	}
 
 	if response.StatusCode != http.StatusOK {
@@ -81,7 +104,13 @@ func (c *HTTPBookingClient) GetReservation(reservationID uuid.UUID) (*Reservatio
 func (c *HTTPBookingClient) ConfirmReservation(reservationID uuid.UUID) error {
 	url := fmt.Sprintf("%s/api/v1/reservations/%s/confirm", c.baseURL, reservationID.String())
 
-	response, err := c.http.Post(url, "application/json", nil)
+	req, err := c.request(http.MethodPost, url)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	response, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("booking-service unreachable: %w", err)
 	}

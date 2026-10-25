@@ -1,0 +1,149 @@
+openapi: 3.0.3
+info:
+  title: TickId Gateway API
+  version: 1.0.0
+  description: |
+    Kontrak API gateway (Go) — titik masuk tunggal ke semua service.
+
+    Port: 8080 di dalam container/jaringan compose, dipublikasikan ke host
+    pada **8086** (port 8080 host dipakai proses lain di mesin development).
+
+    Gateway hanya **meneruskan dan mengganti prefix path**; skema request dan
+    response setiap endpoint bisnis dimiliki oleh spec service masing-masing
+    (`auth.yaml`, `catalog.yaml`, `booking.yaml`, `payment.yaml`,
+    `notification.yaml`). Untuk alasan itu gateway hanya mendokumentasikan
+    endpoint miliknya sendiri (`/health`, `/health/{name}`) plus tabel proxy
+    di `x-proxy-routes`.
+
+    Aturan rewrite identik dengan proxy Vite (`../web-portal/vite.config.ts`) dan
+    `../web-portal/nginx.conf`, jadi path yang dipakai klien sama persis di
+    ketiganya.
+
+    Bentuk error gateway: `{"message": string}` — konsisten dengan
+    `libs/common/httperr`.
+
+    - Upstream tidak terjangkau -> `502` `{"message": "<service> tidak dapat dihubungi"}`
+    - Path tidak dikenal -> `404` `{"message": "route tidak ditemukan di gateway"}`
+servers:
+  - url: http://localhost:8086
+    description: gateway (host port 8086 -> container 8080)
+tags:
+  - name: Health
+    description: Kesehatan gateway dan agregasi semua service
+  - name: Proxy
+    description: Permukaan publik yang diteruskan ke upstream
+
+x-proxy-routes:
+  - public: /api/auth/*
+    upstream: auth-service:8081
+    rewrite: /api/auth -> /api/v1/auth
+    spec: openapi/auth.yaml
+  - public: /api/catalog/*
+    upstream: catalog-service:8082
+    rewrite: /api/catalog -> /api/v1
+    spec: openapi/catalog.yaml
+  - public: /api/booking/*
+    upstream: booking-service:8083
+    rewrite: /api/booking -> /api/v1
+    spec: openapi/booking.yaml
+  - public: /api/payment/*
+    upstream: payment-service:8084
+    rewrite: /api/payment -> /api/v1
+    spec: openapi/payment.yaml
+  - public: /api/notifications/*
+    upstream: notification-service:8085
+    rewrite: /api/notifications -> /api/v1/notifications
+    spec: openapi/notification.yaml
+
+paths:
+  /health:
+    get:
+      summary: Kesehatan agregat semua upstream
+      description: >-
+        Memanggil `GET /health` di setiap upstream dengan timeout 1,5 detik.
+        `200` bila semua `up`, `503` bila ada yang `down` — body tetap berisi
+        status tiap service.
+      tags: [Health]
+      operationId: aggregateHealth
+      responses:
+        "200":
+          description: Semua upstream sehat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AggregateHealthResponse"
+        "503":
+          description: Minimal satu upstream tidak sehat; field `services` tetap diisi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AggregateHealthResponse"
+
+  /health/{name}:
+    get:
+      summary: Teruskan health check ke satu service
+      description: >-
+        Meneruskan ke `GET {upstream}/health` dan mengembalikan body apa adanya.
+        Nama yang valid: `auth`, `catalog`, `booking`, `payment`, `notification`.
+        Path ini sengaja dibuat sama dengan `/health/*` pada web-portal.
+      tags: [Health]
+      operationId: serviceHealth
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [auth, catalog, booking, payment, notification]
+      responses:
+        "200":
+          description: Health upstream diteruskan apa adanya
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: auth-service
+        "503":
+          description: Upstream tidak terjangkau
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: down
+                  service:
+                    type: string
+                    example: auth-service:8081
+
+components:
+  schemas:
+    AggregateHealthResponse:
+      type: object
+      required: [status, gateway, services]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          description: '`ok` bila semua upstream 200, `degraded` bila ada yang gagal.'
+        gateway:
+          type: string
+          example: gateway
+        services:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [up, down]
+          example:
+            auth: up
+            catalog: up
+            booking: up
+            payment: up
+            notification: up

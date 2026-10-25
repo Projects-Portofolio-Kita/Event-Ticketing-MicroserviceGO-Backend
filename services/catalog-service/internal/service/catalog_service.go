@@ -7,7 +7,6 @@ import (
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/client"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/dto"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/model"
-	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/repository"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -17,12 +16,22 @@ var (
 	ErrInvalidInput  = errors.New("invalid input")
 )
 
+// eventStore is the consumer-side slice of repository.CatalogRepository the
+// service actually uses. Depending on this narrow interface keeps the service
+// testable with an in-memory fake; *repository.CatalogRepository satisfies it.
+type eventStore interface {
+	FindEvents() ([]model.Event, error)
+	FindByID(id uuid.UUID) (*model.Event, error)
+	FindCategoriesByEvent(eventID uuid.UUID) ([]model.SeatCategory, error)
+	FindSeatsByEvent(eventID uuid.UUID) ([]model.Seat, error)
+}
+
 type CatalogService struct {
-	repository *repository.CatalogRepository
+	repository eventStore
 	booking    client.BookingClient
 }
 
-func NewCatalogService(repository *repository.CatalogRepository, booking client.BookingClient) *CatalogService {
+func NewCatalogService(repository eventStore, booking client.BookingClient) *CatalogService {
 	return &CatalogService{
 		repository: repository,
 		booking:    booking,

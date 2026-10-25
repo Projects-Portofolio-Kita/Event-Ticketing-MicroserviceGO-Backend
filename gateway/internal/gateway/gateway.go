@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
 	"github.com/gin-gonic/gin"
 )
@@ -126,6 +127,11 @@ func (g *Gateway) forward(up Upstream, target *url.URL) gin.HandlerFunc {
 		req.URL.Host = target.Host
 		req.URL.Path = rewritePath(up, req.URL.Path)
 		req.Host = target.Host
+
+		// The internal credential must never be accepted from the public
+		// internet: strip whatever the caller sent so upstream services can
+		// only be reached with a token that originated inside the network.
+		req.Header.Del(authz.ServiceHeader)
 
 		// httputil reads the body itself; mark gin's copy as consumed.
 		proxy.ServeHTTP(c.Writer, req)

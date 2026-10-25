@@ -1,0 +1,201 @@
+openapi: 3.0.3
+info:
+  title: TickId Catalog Service API
+  version: 1.0.0
+  description: |
+    Kontrak API catalog-service (Go + Gin, port 8082).
+
+    Sumber kebenaran: `services/catalog-service/cmd/server/main.go` (route),
+    `internal/dto/catalog_response.go`, `internal/service/catalog_service.go`, dan
+    `internal/handler/catalog_handler.go`.
+
+    Endpoint publik — tidak ada auth. Prefix `/api/v1` untuk endpoint bisnis,
+    `/health` untuk liveness.
+
+    Ketersediaan kursi dimiliki booking-service; catalog-service memanggil
+    `GET /api/v1/events/{eventId}/seat-status` di booking-service dan
+    menurunkan statusnya menjadi `available | locked | sold`
+    (`CONFIRMED` -> `sold`, `LOCKED` -> `locked`, selain itu -> `available`).
+    Bila booking-service down, semua kursi diberi status `available`.
+
+    Error memakai `{"message": string}`.
+servers:
+  - url: http://localhost:8082
+    description: catalog-service lokal
+tags:
+  - name: Health
+    description: Liveness probe
+  - name: Catalog
+    description: Daftar event dan peta kursi
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      responses:
+        "200":
+          description: Service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/events:
+    get:
+      tags: [Catalog]
+      operationId: listEvents
+      summary: Daftar event
+      responses:
+        "200":
+          description: Daftar event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{id}/seatmap:
+    get:
+      tags: [Catalog]
+      operationId: getSeatMap
+      summary: Peta kursi per kategori untuk satu event
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Peta kursi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeatMapResponse"
+        "400":
+          description: '`id` bukan UUID valid (`invalid input: eventId`)'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal membaca database / booking-service bermasalah
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: catalog-service
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    EventListResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventResponse"
+    EventResponse:
+      type: object
+      required: [id, code, name, venue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        venue:
+          type: string
+    SeatMapResponse:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategoryResponse"
+    CategoryResponse:
+      type: object
+      required: [id, name, subtitle, dotColor, price, rows]
+      properties:
+        id:
+          type: string
+          description: Kode kategori kursi (`SeatCategory.Code`).
+        name:
+          type: string
+        subtitle:
+          type: string
+        dotColor:
+          type: string
+        price:
+          type: number
+          format: double
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/RowResponse"
+    RowResponse:
+      type: object
+      required: [rowName, leftSeats, rightSeats]
+      properties:
+        rowName:
+          type: string
+        leftSeats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatResponse"
+        rightSeats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatResponse"
+    SeatResponse:
+      type: object
+      required: [id, seatId, row, number, status, category, price]
+      properties:
+        id:
+          type: string
+          description: Label kursi (`Seat.Label`), mis. `A1`.
+        seatId:
+          type: string
+          format: uuid
+        row:
+          type: string
+        number:
+          type: integer
+        status:
+          type: string
+          enum: [available, locked, sold]
+        category:
+          type: string
+        price:
+          type: number
+          format: double

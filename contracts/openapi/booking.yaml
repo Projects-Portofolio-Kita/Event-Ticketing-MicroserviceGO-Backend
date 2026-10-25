@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: TickId Booking Service API
+  version: 1.0.0
+  description: |
+    Kontrak API booking-service (Go + Gin, port 8083) — reservasi / seat lock.
+
+    Sumber kebenaran: route di
+    `services/booking-service/cmd/server/main.go`,
+    `internal/dto/reservation_request.go`, `internal/dto/reservation_response.go`,
+    `internal/handler/reservation_handler.go`, dan `internal/model/reservation.go`.
+
+    Prefix `/api/v1` untuk endpoint bisnis, `/health` untuk liveness.
+
+    Catatan auth: web-portal (`../web-portal/src/services/booking.ts`) mengirim
+    header `Authorization: Bearer <accessToken>` pada `POST /api/v1/reservations`,
+    tetapi booking-service saat ini TIDAK memverifikasi JWT di server
+    (tidak ada middleware `RequireAuth` di `cmd/server/main.go`) — oleh karena
+    itu operasi di bawah tidak memiliki `security`.
+
+    TTL reservasi 5 menit (`reservationTTL`), status awal `LOCKED`.
+    Error selalu `{"message": string}`.
+servers:
+  - url: http://localhost:8083
+    description: booking-service lokal
+tags:
+  - name: Health
+    description: Liveness probe
+  - name: Reservations
+    description: Pembuatan dan pengelolaan reservasi kursi
+  - name: SeatStatus
+    description: Status kursi per event (dipakai catalog-service)
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      responses:
+        "200":
+          description: Service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/reservations:
+    post:
+      tags: [Reservations]
+      operationId: createReservation
+      summary: Buat reservasi (lock kursi)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReservationRequest"
+      responses:
+        "201":
+          description: Reservasi dibuat dengan status `LOCKED`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Input tidak valid (UUID salah / minimal satu kursi / binding error)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Sebagian kursi sudah di-lock atau terjual (`ErrSeatsUnavailable`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/reservations/{id}:
+    get:
+      tags: [Reservations]
+      operationId: getReservation
+      summary: Ambil reservasi by ID
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Detail reservasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "404":
+          description: Reservasi tidak ditemukan atau ID bukan UUID valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/reservations/{id}/confirm:
+    post:
+      tags: [Reservations]
+      operationId: confirmReservation
+      summary: Konfirmasi reservasi (LOCKED -> CONFIRMED)
+      description: |
+        Dipanggil payment-service setelah pembayaran sukses
+        (`internal/service/booking_client.go`). Bila reservasi bukan `LOCKED`
+        atau sudah lewat `expiresAt`, mengembalikan 400 (reservasi yang lewat
+        tempo diubah menjadi `EXPIRED`).
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Reservasi terkonfirmasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Status bukan LOCKED, sudah kedaluwarsa, atau ID tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/reservations/{id}/cancel:
+    post:
+      tags: [Reservations]
+      operationId: cancelReservation
+      summary: Batalkan reservasi (-> CANCELLED)
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Reservasi dibatalkan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Reservasi sudah CONFIRMED atau ID tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{eventId}/seat-status:
+    get:
+      tags: [SeatStatus]
+      operationId: getEventSeatStatus
+      summary: Kursi terkunci/terjual untuk satu event
+      description: |
+        Hanya kursi dari reservasi berstatus `LOCKED` (masih berlaku) atau
+        `CONFIRMED`. Dipakai catalog-service untuk menentukan
+        `available | locked | sold`.
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Daftar status kursi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeatStatusListResponse"
+        "400":
+          description: '`eventId` bukan UUID valid'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  parameters:
+    ReservationId:
+      name: id
+      in: path
+      required: true
+      description: Reservation ID (UUID).
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: booking-service
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+    CreateReservationRequest:
+      type: object
+      required: [userId, eventId, seats]
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: Pemilik reservasi (dari session JWT di web-portal).
+        eventId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          description: Kosong = `IDR`.
+          default: IDR
+          example: IDR
+        seats:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/SeatItemRequest"
+    SeatItemRequest:
+      type: object
+      required: [seatId, section, row, number, price]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        section:
+          type: string
+          description: Nama kategori kursi.
+        row:
+          type: string
+        number:
+          type: string
+          description: Nomor kursi (string, sesuai `ReservationSeat.Number`).
+        price:
+          type: number
+          format: double
+    ReservationResponse:
+      type: object
+      required:
+        - reservationId
+        - userId
+        - eventId
+        - bookingRef
+        - status
+        - expiresAt
+        - totalAmount
+        - currency
+        - seats
+        - createdAt
+      properties:
+        reservationId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        bookingRef:
+          type: string
+          example: TICK-1735689600-0421
+        status:
+          type: string
+          enum: [LOCKED, CONFIRMED, EXPIRED, CANCELLED]
+        expiresAt:
+          type: string
+          format: date-time
+        totalAmount:
+          type: number
+          format: double
+        currency:
+          type: string
+          example: IDR
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatItemResponse"
+        createdAt:
+          type: string
+          format: date-time
+    SeatItemResponse:
+      type: object
+      required: [seatId, section, row, number, price]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        section:
+          type: string
+        row:
+          type: string
+        number:
+          type: string
+        price:
+          type: number
+          format: double
+    SeatStatusListResponse:
+      type: object
+      required: [seats]
+      properties:
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatStatusResponse"
+    SeatStatusResponse:
+      type: object
+      required: [seatId, status]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: Status reservasi pemilik kursi (`LOCKED` atau `CONFIRMED`).
+          enum: [LOCKED, CONFIRMED]

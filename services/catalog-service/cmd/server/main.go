@@ -2,10 +2,13 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/health"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/httperr"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/client"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/handler"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/catalog-service/internal/model"
@@ -17,6 +20,10 @@ import (
 )
 
 func main() {
+	// The seat availability feed it reads from booking-service is
+	// service-to-service only, so catalog cannot start without the token.
+	authz.RequireEnv("SERVICE_TOKEN")
+
 	db, err := database.NewConnection()
 	if err != nil {
 		log.Fatal(err)
@@ -39,6 +46,12 @@ func main() {
 	router.Use(cors.New())
 
 	health.Register(router, "catalog-service")
+
+	// Unknown routes answer with the standard JSON envelope instead of gin's
+	// plain-text 404.
+	router.NoRoute(func(c *gin.Context) {
+		httperr.JSON(c, http.StatusNotFound, "route tidak ditemukan")
+	})
 
 	api := router.Group("/api/v1")
 	{

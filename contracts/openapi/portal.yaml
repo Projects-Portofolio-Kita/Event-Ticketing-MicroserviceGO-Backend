@@ -1,0 +1,861 @@
+openapi: 3.0.3
+info:
+  title: TickId Web Portal API (Proxy)
+  version: 1.0.0
+  description: |
+    Kontrak HTTP yang dipakai **web-portal** (`../web-portal/src/services/*.ts`)
+    melalui proxy di `http://localhost:3000` (Vite dev server
+    `../web-portal/vite.config.ts`, produksi: `../web-portal/nginx.conf`).
+
+    File ini hanya me-representasikan ulang endpoint service di belakang proxy —
+    path dan bentuk response identik dengan spec masing-masing service
+    (`contracts/openapi/auth.yaml`, `catalog.yaml`, `booking.yaml`, `payment.yaml`).
+
+    Aturan rewrite proxy (identik di Vite dan nginx):
+
+    | Path portal | Target |
+    |---|---|
+    | `/api/auth/*` | `auth-service:8081` `/api/v1/auth/*` |
+    | `/api/catalog/*` | `catalog-service:8082` `/api/v1/*` |
+    | `/api/booking/*` | `booking-service:8083` `/api/v1/*` |
+    | `/api/payment/*` | `payment-service:8084` `/api/v1/*` |
+    | `/health/auth` | `auth-service:8081` `/health` |
+    | `/health/catalog` | `catalog-service:8082` `/health` |
+    | `/health/booking` | `booking-service:8083` `/health` |
+    | `/health/payment` | `payment-service:8084` `/health` |
+
+    Klien yang memakai kontrak ini:
+    - `src/services/auth.ts` → `/api/auth/{register,login,refresh,google}`
+      (menerima `token` ATAU `accessToken`, plus `refreshToken`, `user`).
+    - `src/services/catalog.ts` → `/api/catalog/events`,
+      `/api/catalog/events/{id}/seatmap` (publik, tanpa auth).
+    - `src/services/booking.ts` → `POST /api/booking/reservations` dengan
+      `Authorization: Bearer <accessToken>` dan body
+      `{ userId, eventId, seats[], currency }`.
+    - `src/services/health.ts` → `/health/{auth,catalog,booking,payment}`.
+
+    Catatan: hanya `/api/auth/me` yang benar-benar memverifikasi JWT di server
+    (middleware `RequireAuth`); booking/payment service saat ini belum
+    memverifikasi `Authorization` header di sisi server.
+servers:
+  - url: http://localhost:3000
+    description: Web portal (proxy Vite dev / nginx produksi)
+tags:
+  - name: Health
+    description: Status service via proxy /health/*
+  - name: Auth
+    description: Proxy ke auth-service (:8081)
+  - name: Catalog
+    description: Proxy ke catalog-service (:8082)
+  - name: Booking
+    description: Proxy ke booking-service (:8083)
+  - name: Payment
+    description: Proxy ke payment-service (:8084)
+paths:
+  /health/auth:
+    get:
+      tags: [Health]
+      operationId: healthAuth
+      summary: Health check auth-service
+      responses:
+        "200":
+          description: auth-service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /health/catalog:
+    get:
+      tags: [Health]
+      operationId: healthCatalog
+      summary: Health check catalog-service
+      responses:
+        "200":
+          description: catalog-service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /health/booking:
+    get:
+      tags: [Health]
+      operationId: healthBooking
+      summary: Health check booking-service
+      responses:
+        "200":
+          description: booking-service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /health/payment:
+    get:
+      tags: [Health]
+      operationId: healthPayment
+      summary: Health check payment-service
+      responses:
+        "200":
+          description: payment-service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Registrasi akun
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registrasi berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email sudah terdaftar
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Pendaftaran gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Login email + password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Email atau kata sandi salah
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Login gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotasi refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Session baru
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Refresh token tidak valid / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/auth/google:
+    post:
+      tags: [Auth]
+      operationId: loginWithGoogle
+      summary: Login dengan Google ID token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleRequest"
+      responses:
+        "200":
+          description: Login Google berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Token Google tidak valid / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Login Google gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Google login belum dikonfigurasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Profil user pada session aktif
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Profil user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Token tidak ada / tidak valid / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/catalog/events:
+    get:
+      tags: [Catalog]
+      operationId: listEvents
+      summary: Daftar event
+      responses:
+        "200":
+          description: Daftar event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventListResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/catalog/events/{id}/seatmap:
+    get:
+      tags: [Catalog]
+      operationId: getSeatMap
+      summary: Peta kursi per kategori
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Peta kursi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeatMapResponse"
+        "400":
+          description: '`id` bukan UUID valid'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/booking/reservations:
+    post:
+      tags: [Booking]
+      operationId: createReservation
+      summary: Buat reservasi (lock kursi)
+      description: |
+        Dipanggil `../web-portal/src/services/booking.ts` dengan
+        `Authorization: Bearer <accessToken>`; booking-service saat ini belum
+        memverifikasi token tersebut di server.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReservationRequest"
+      responses:
+        "201":
+          description: Reservasi dibuat (status `LOCKED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Input tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Kursi sudah di-lock / terjual
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/booking/reservations/{id}:
+    get:
+      tags: [Booking]
+      operationId: getReservation
+      summary: Ambil reservasi by ID
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Detail reservasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "404":
+          description: Reservasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/booking/reservations/{id}/confirm:
+    post:
+      tags: [Booking]
+      operationId: confirmReservation
+      summary: Konfirmasi reservasi
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Reservasi terkonfirmasi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Status bukan LOCKED / sudah kedaluwarsa / ID tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/booking/reservations/{id}/cancel:
+    post:
+      tags: [Booking]
+      operationId: cancelReservation
+      summary: Batalkan reservasi
+      parameters:
+        - $ref: "#/components/parameters/ReservationId"
+      responses:
+        "200":
+          description: Reservasi dibatalkan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationResponse"
+        "400":
+          description: Reservasi sudah CONFIRMED / ID tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/booking/events/{eventId}/seat-status:
+    get:
+      tags: [Booking]
+      operationId: getEventSeatStatus
+      summary: Kursi terkunci/terjual untuk satu event
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Daftar status kursi
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SeatStatusListResponse"
+        "400":
+          description: '`eventId` bukan UUID valid'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/payment/payments:
+    post:
+      tags: [Payment]
+      operationId: createPayment
+      summary: Buat pembayaran QRIS
+      description: 'Error memakai `{"error": string}` (bukan `{"message": string}`).'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentRequest"
+      responses:
+        "201":
+          description: Pembayaran dibuat (status `PENDING`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "400":
+          description: Reservasi tidak valid / metode bukan QRIS / reservasi bukan LOCKED / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentErrorResponse"
+  /api/payment/payments/{id}:
+    get:
+      tags: [Payment]
+      operationId: getPayment
+      summary: Ambil pembayaran by ID
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Detail pembayaran
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "404":
+          description: Pembayaran tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentErrorResponse"
+  /api/payment/payments/{id}/confirm:
+    post:
+      tags: [Payment]
+      operationId: confirmPayment
+      summary: Konfirmasi pembayaran
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Pembayaran terkonfirmasi (status `SUCCEEDED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "400":
+          description: Status bukan PENDING / kedaluwarsa / konfirmasi reservasi gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentErrorResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT hasil `POST /api/auth/login`.
+  parameters:
+    ReservationId:
+      name: id
+      in: path
+      required: true
+      description: Reservation ID (UUID).
+      schema:
+        type: string
+        format: uuid
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      description: Payment ID (UUID).
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: auth-service
+    ErrorResponse:
+      type: object
+      required: [message]
+      description: Bentuk error auth/catalog/booking.
+      properties:
+        message:
+          type: string
+    PaymentErrorResponse:
+      type: object
+      required: [error]
+      description: Bentuk error payment-service.
+      properties:
+        error:
+          type: string
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 6
+          maxLength: 100
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 1
+          maxLength: 100
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 10
+    GoogleRequest:
+      type: object
+      required: [idToken]
+      properties:
+        idToken:
+          type: string
+          minLength: 10
+    PublicUser:
+      type: object
+      required: [id, email, name]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        avatar:
+          type: string
+    SessionResponse:
+      type: object
+      required: [accessToken, token, refreshToken, user]
+      description: "`accessToken` dan `token` berisi JWT yang sama (kontrak auth.ts)."
+      properties:
+        accessToken:
+          type: string
+        token:
+          type: string
+        refreshToken:
+          type: string
+        user:
+          $ref: "#/components/schemas/PublicUser"
+    MeResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/PublicUser"
+    EventListResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventResponse"
+    EventResponse:
+      type: object
+      required: [id, code, name, venue]
+      properties:
+        id:
+          type: string
+          format: uuid
+        code:
+          type: string
+        name:
+          type: string
+        venue:
+          type: string
+    SeatMapResponse:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/CategoryResponse"
+    CategoryResponse:
+      type: object
+      required: [id, name, subtitle, dotColor, price, rows]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        subtitle:
+          type: string
+        dotColor:
+          type: string
+        price:
+          type: number
+          format: double
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/RowResponse"
+    RowResponse:
+      type: object
+      required: [rowName, leftSeats, rightSeats]
+      properties:
+        rowName:
+          type: string
+        leftSeats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatResponse"
+        rightSeats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatResponse"
+    SeatResponse:
+      type: object
+      required: [id, seatId, row, number, status, category, price]
+      properties:
+        id:
+          type: string
+        seatId:
+          type: string
+          format: uuid
+        row:
+          type: string
+        number:
+          type: integer
+        status:
+          type: string
+          enum: [available, locked, sold]
+        category:
+          type: string
+        price:
+          type: number
+          format: double
+    CreateReservationRequest:
+      type: object
+      required: [userId, eventId, seats]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        currency:
+          type: string
+          default: IDR
+        seats:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/SeatItemRequest"
+    SeatItemRequest:
+      type: object
+      required: [seatId, section, row, number, price]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        section:
+          type: string
+        row:
+          type: string
+        number:
+          type: string
+        price:
+          type: number
+          format: double
+    ReservationResponse:
+      type: object
+      required:
+        - reservationId
+        - userId
+        - eventId
+        - bookingRef
+        - status
+        - expiresAt
+        - totalAmount
+        - currency
+        - seats
+        - createdAt
+      properties:
+        reservationId:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        eventId:
+          type: string
+          format: uuid
+        bookingRef:
+          type: string
+        status:
+          type: string
+          enum: [LOCKED, CONFIRMED, EXPIRED, CANCELLED]
+        expiresAt:
+          type: string
+          format: date-time
+        totalAmount:
+          type: number
+          format: double
+        currency:
+          type: string
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatItemResponse"
+        createdAt:
+          type: string
+          format: date-time
+    SeatItemResponse:
+      type: object
+      required: [seatId, section, row, number, price]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        section:
+          type: string
+        row:
+          type: string
+        number:
+          type: string
+        price:
+          type: number
+          format: double
+    SeatStatusListResponse:
+      type: object
+      required: [seats]
+      properties:
+        seats:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeatStatusResponse"
+    SeatStatusResponse:
+      type: object
+      required: [seatId, status]
+      properties:
+        seatId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [LOCKED, CONFIRMED]
+    CreatePaymentRequest:
+      type: object
+      required: [reservation_id, payment_method]
+      properties:
+        reservation_id:
+          type: string
+          format: uuid
+        payment_method:
+          type: string
+          enum: [QRIS]
+          example: QRIS
+    PaymentResponse:
+      type: object
+      required: [id, reservation_id, qr_string, qr_url, status, amount, currency, expired_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reservation_id:
+          type: string
+          format: uuid
+        qr_string:
+          type: string
+        qr_url:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, EXPIRED, SUCCEEDED, CANCELED, FAILED]
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+        expired_at:
+          type: string
+          format: date-time

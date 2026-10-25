@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "contracts/events/payment.succeeded.v1.json",
+  "title": "payment.succeeded.v1",
+  "description": "Diterbitkan saat pembayaran berstatus SUCCEEDED (QRIS terkonfirmasi). Kontrak integrasi berikutnya — message broker belum aktif, saat ini payment-service memanggil confirm reservasi di booking-service langsung via HTTP.",
+  "type": "object",
+  "required": ["eventId", "occurredAt", "producer", "payload"],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "description": "Nama event pada broker (bukan domain event/id UUID), mis. \"payment.succeeded.v1\".",
+      "minLength": 1,
+      "examples": ["payment.succeeded.v1"]
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Waktu UTC saat fakta bisnis terjadi (RFC 3339)."
+    },
+    "producer": {
+      "type": "string",
+      "description": "Service pembuat event.",
+      "enum": ["payment-service"]
+    },
+    "payload": {
+      "type": "object",
+      "required": ["paymentId", "reservationId", "amount", "currency", "method", "paidAt"],
+      "properties": {
+        "paymentId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "reservationId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "amount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string",
+          "examples": ["IDR"]
+        },
+        "method": {
+          "type": "string",
+          "description": "Metode pembayaran yang diterima (`payment_method` pada request create payment).",
+          "examples": ["QRIS"]
+        },
+        "paidAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Waktu pembayaran tercatat (RFC 3339)."
+        }
+      }
+    }
+  }
+}

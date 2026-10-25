@@ -4,11 +4,13 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/httperr"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/dto"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/model"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/service"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type ReservationHandler struct {
@@ -19,6 +21,29 @@ func NewReservationHandler(service *service.ReservationService) *ReservationHand
 	return &ReservationHandler{service: service}
 }
 
+// caller reads the principal that authz put on the context. Every handler
+// below is mounted behind RequireUser or RequireUserOrService, so it is
+// always populated.
+func caller(c *gin.Context) authz.Caller {
+	return authz.CallerFrom(c)
+}
+
+// writeError maps service errors onto HTTP statuses using the shared envelope.
+func writeError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrForbidden):
+		httperr.JSON(c, http.StatusForbidden, err.Error())
+	case errors.Is(err, service.ErrSeatsUnavailable):
+		httperr.JSON(c, http.StatusConflict, err.Error())
+	case errors.Is(err, service.ErrInvalidInput):
+		httperr.JSON(c, http.StatusBadRequest, err.Error())
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		httperr.NotFound(c, "reservasi tidak ditemukan")
+	default:
+		httperr.Internal(c, "Terjadi kesalahan pada server.")
+	}
+}
+
 func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 	var req dto.CreateReservationRequest
 
@@ -27,13 +52,9 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		return
 	}
 
-	reservation, err := h.service.CreateReservation(&req)
+	reservation, err := h.service.CreateReservation(&req, caller(c))
 	if err != nil {
-		if errors.Is(err, service.ErrSeatsUnavailable) {
-			httperr.JSON(c, http.StatusConflict, err.Error())
-			return
-		}
-		httperr.BadRequest(c, err.Error())
+		writeError(c, err)
 		return
 	}
 
@@ -41,9 +62,9 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 }
 
 func (h *ReservationHandler) GetReservation(c *gin.Context) {
-	reservation, err := h.service.GetReservation(c.Param("id"))
+	reservation, err := h.service.GetReservation(c.Param("id"), caller(c))
 	if err != nil {
-		httperr.NotFound(c, err.Error())
+		writeError(c, err)
 		return
 	}
 
@@ -53,7 +74,7 @@ func (h *ReservationHandler) GetReservation(c *gin.Context) {
 func (h *ReservationHandler) GetEventSeatStatus(c *gin.Context) {
 	statuses, err := h.service.GetSeatStatus(c.Param("eventId"))
 	if err != nil {
-		httperr.BadRequest(c, err.Error())
+		writeError(c, err)
 		return
 	}
 
@@ -61,9 +82,9 @@ func (h *ReservationHandler) GetEventSeatStatus(c *gin.Context) {
 }
 
 func (h *ReservationHandler) ConfirmReservation(c *gin.Context) {
-	reservation, err := h.service.ConfirmReservation(c.Param("id"))
+	reservation, err := h.service.ConfirmReservation(c.Param("id"), caller(c))
 	if err != nil {
-		httperr.BadRequest(c, err.Error())
+		writeError(c, err)
 		return
 	}
 
@@ -71,9 +92,9 @@ func (h *ReservationHandler) ConfirmReservation(c *gin.Context) {
 }
 
 func (h *ReservationHandler) CancelReservation(c *gin.Context) {
-	reservation, err := h.service.CancelReservation(c.Param("id"))
+	reservation, err := h.service.CancelReservation(c.Param("id"), caller(c))
 	if err != nil {
-		httperr.BadRequest(c, err.Error())
+		writeError(c, err)
 		return
 	}
 

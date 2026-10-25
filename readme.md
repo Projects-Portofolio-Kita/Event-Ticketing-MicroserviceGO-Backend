@@ -13,10 +13,10 @@ backend/
 ├── libs/
 │   └── common/                  # Go module bersama: cors, health, httperr, notify
 ├── gateway/                     # :8086 (host) -> :8080 (container), proxy tunggal
+├── contracts/                   # OpenAPI + skema event (dipakai bersama frontend)
 ├── docker-compose.yml           # include ../infrastucture/docker-compose.yml (postgres)
 └── readme.md
 
-../contracts/                    # OpenAPI + skema event (dipakai bersama frontend)
 ../infrastucture/                # postgres: satu-satunya definisi database
 ../web-portal/                   # Vite/React portal, dev :3000
 ```
@@ -868,6 +868,38 @@ Contract event:
 ```text
 contracts/events/
 ```
+
+---
+
+# 18b. Autentikasi & Otorisasi (`libs/common/authz`)
+
+Dua kredensial, dua arti berbeda:
+
+| Kredensial | Header | Dipakai untuk | Membuktikan |
+| --- | --- | --- | --- |
+| User JWT (HS256, diterbitkan auth-service) | `Authorization: Bearer <token>` | endpoint yang menyentuh data user (reservasi, pembayaran, daftar & tandai-notifikasi) | **siapa** pemanggil |
+| Service token | `X-Service-Token` | panggilan antar-service (payment → booking, catalog → seat-status, booking/payment → notification) | **apa** yang memanggil |
+
+Pemasangannya di `main.go`:
+
+```go
+jwtSecret := authz.RequireEnv("JWT_SECRET")       // gagal saat startup bila kosong
+serviceToken := authz.RequireEnv("SERVICE_TOKEN")
+
+api.POST("/reservations", authz.RequireUser(jwtSecret), h.CreateReservation)
+api.GET("/reservations/:id", authz.RequireUserOrService(jwtSecret, serviceToken), h.GetReservation)
+api.GET("/events/:eventId/seat-status", authz.RequireService(serviceToken), h.GetEventSeatStatus)
+```
+
+Aturan yang berlaku:
+
+- Identitas diambil dari token, **bukan** dari body request: `userId` di payload diabaikan, service memakai `authz.CallerFrom(c)`.
+- Ownership ditegakkan di lapisan service: pemanggil `Internal` (memakai `X-Service-Token`) melewati cek, selain itu wajib cocok dengan pemilik — melanggar menghasilkan `403`.
+- Keduanya **fail-closed**: secret atau token kosong berarti semua permintaan ditolak, bukan diizinkan.
+- Gateway **menghapus** `X-Service-Token` dari traffic publik dan sengaja tidak diberi `SERVICE_TOKEN`, sehingga kredensial internal tidak pernah bisa masuk dari internet.
+- Rute yang tidak dikenal di setiap service menjawab JSON `{"message": "..."}` (404), bukan plain text.
+
+Environment wajib (lihat `.env.example` tiap service): `JWT_SECRET` dengan nilai yang sama seperti auth-service di booking, payment, notification; `SERVICE_TOKEN` dengan nilai yang sama di catalog, booking, payment, notification.
 
 ---
 

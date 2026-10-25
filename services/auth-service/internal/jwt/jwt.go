@@ -46,12 +46,15 @@ func (m *Manager) GenerateAccess(userID uuid.UUID, email string) (string, error)
 
 // ParseAccess validates the JWT and returns the subject (user ID) and email.
 func (m *Manager) ParseAccess(raw string) (userID string, email string, err error) {
+	// Only HS256 is ever issued, so anything else (HS384/HS512 re-signed by
+	// somebody who knows the secret, "none", RSA-shaped headers) is refused
+	// outright rather than merely failing the keyfunc check.
 	token, err := jwtlib.Parse(raw, func(t *jwtlib.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwtlib.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return m.secret, nil
-	})
+	}, jwtlib.WithValidMethods([]string{"HS256"}))
 	if err != nil {
 		return "", "", err
 	}
