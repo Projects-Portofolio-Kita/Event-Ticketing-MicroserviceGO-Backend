@@ -3,18 +3,31 @@
 Panduan singkat untuk membuat dan menjalankan service baru pada project:
 
 ```text
-Event-Ticketing-MicroserviceGO-Backend/
+backend/
 ├── services/
-│   ├── user-service/
-│   ├── catalog-service/
-│   ├── booking-service/
-│   ├── payment-service/
-│   └── notification-service/
+│   ├── auth-service/            # :8081  register/login/JWT/Google
+│   ├── catalog-service/         # :8082  events + seatmap
+│   ├── booking-service/         # :8083  reservasi & lock kursi
+│   ├── payment-service/         # :8084  QRIS (mock)
+│   └── notification-service/    # :8085  notifikasi pengguna
 ├── libs/
-├── contracts/
-├── gateway/
-├── docker-compose.yml
-└── README.md
+│   └── common/                  # Go module bersama: cors, health, httperr, notify
+├── gateway/                     # :8086 (host) -> :8080 (container), proxy tunggal
+├── docker-compose.yml           # include ../infrastucture/docker-compose.yml (postgres)
+└── readme.md
+
+../contracts/                    # OpenAPI + skema event (dipakai bersama frontend)
+../infrastucture/                # postgres: satu-satunya definisi database
+../web-portal/                   # Vite/React portal, dev :3000
+```
+
+Stack penuh (database + 5 service + gateway + portal):
+
+```powershell
+docker compose -f backend/docker-compose.yml up -d --build
+# cek semuanya dalam satu request
+Invoke-RestMethod http://localhost:8086/health
+# atau per service: 8081 auth · 8082 catalog · 8083 booking · 8084 payment · 8085 notification
 ```
 
 ---
@@ -194,6 +207,43 @@ New-Item .gitignore
 New-Item Dockerfile
 New-Item README.md
 ```
+
+---
+
+# 4b. Menggunakan `libs/common`
+
+Semua service memakai satu modul Go bersama di `backend/libs/common`:
+
+| Paket | Fungsi |
+|---|---|
+| `cors` | Preflight CORS seragam (dulu disalin di tiap service) |
+| `health` | `GET /health` dengan payload `{"status","service"}` |
+| `httperr` | Envelope error `{"message": "..."}` |
+| `notify` | Client fire-and-forget ke notification-service |
+
+Tarik lewat `replace` lokal (diinisialisasi otomatis saat `go mod tidy`):
+
+```go.mod
+require github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common v0.0.0
+
+replace github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common => ../../libs/common
+```
+
+Pakai di `cmd/server/main.go`:
+
+```go
+router := gin.Default()
+router.Use(cors.New())
+health.Register(router, "my-service")
+```
+
+Dan di handler: `httperr.BadRequest(c, err.Error())`, di service:
+`notify.New()` lalu `notifier.Send(notify.Message{...})`.
+
+> **Penting untuk Docker:** `replace` lokal membuat path `../../libs/common`
+> wajib ada saat build, jadi **build context harus folder `backend/`**, bukan
+> folder service. Lihat `DockerFile` yang sudah ada — semua memakai
+> `context: .` + `dockerfile: services/<nama>/DockerFile` di compose.
 
 ---
 

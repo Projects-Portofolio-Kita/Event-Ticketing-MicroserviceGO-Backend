@@ -1,33 +1,30 @@
-services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: postgres
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_USER: admin
-      POSTGRES_PASSWORD: tiketid
-      POSTGRES_DB: event_ticketing_db
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - app-network
+name: event-ticketing
 
+# Postgres is defined once, in ../infrastucture/docker-compose.yml, and pulled
+# in here with `include`. Both files share the project name above, so
+# "database only" (infra) and "full stack" (here) can never collide on port
+# 5432 or on container names — there is only one postgres either way.
+include:
+  - ../infrastucture/docker-compose.yml
+
+services:
   auth-service:
     build:
-      context: ./services/auth-service
-      dockerfile: DockerFile
+      context: .
+      dockerfile: services/auth-service/DockerFile
     container_name: auth-service
+    restart: unless-stopped
     ports:
       - "8081:8081"
     environment:
       SERVER_PORT: "8081"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      # Production MUST override with a strong random secret (openssl rand -hex 32).
+      JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
+      JWT_ACCESS_TTL_MINUTES: "15"
+      JWT_REFRESH_TTL_MINUTES: "10080"
+      # Same value as the web portal's VITE_GOOGLE_CLIENT_ID. Empty disables Google login.
+      GOOGLE_CLIENT_ID: ""
     depends_on:
       postgres:
         condition: service_healthy
@@ -36,29 +33,74 @@ services:
 
   catalog-service:
     build:
-      context: ./services/catalog-service
-      dockerfile: DockerFile
+      context: .
+      dockerfile: services/catalog-service/DockerFile
     container_name: catalog-service
+    restart: unless-stopped
     ports:
       - "8082:8082"
     environment:
       SERVER_PORT: "8082"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      BOOKING_SERVICE_URL: "http://booking-service:8083"
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - app-network
 
+  booking-service:
+    build:
+      context: .
+      dockerfile: services/booking-service/DockerFile
+    container_name: booking-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      SERVER_PORT: "8083"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      # Empty disables notifications (fire-and-forget, never blocks a booking).
+      NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-service:
+        condition: service_started
+    networks:
+      - app-network
+
   payment-service:
     build:
-      context: ./services/payment-service
-      dockerfile: DockerFile
+      context: .
+      dockerfile: services/payment-service/DockerFile
     container_name: payment-service
+    restart: unless-stopped
     ports:
       - "8084:8084"
     environment:
       SERVER_PORT: "8084"
+      DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
+      BOOKING_SERVICE_URL: "http://booking-service:8083"
+      NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      notification-service:
+        condition: service_started
+    networks:
+      - app-network
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: services/notification-service/DockerFile
+    container_name: notification-service
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      SERVER_PORT: "8085"
       DATABASE_URL: postgres://admin:tiketid@postgres:5432/event_ticketing_db?sslmode=disable
     depends_on:
       postgres:
@@ -66,8 +108,50 @@ services:
     networks:
       - app-network
 
-volumes:
-  postgres_data:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/DockerFile
+    container_name: gateway
+    restart: unless-stopped
+    # Host 8086: port 8080 on the host is taken by another local (java)
+    # process. Inside the container the gateway still listens on 8080, which
+    # is what SERVER_PORT and every upstream default assume.
+    ports:
+      - "8086:8080"
+    environment:
+      SERVER_PORT: "8080"
+      AUTH_SERVICE_URL: "http://auth-service:8081"
+      CATALOG_SERVICE_URL: "http://catalog-service:8082"
+      BOOKING_SERVICE_URL: "http://booking-service:8083"
+      PAYMENT_SERVICE_URL: "http://payment-service:8084"
+      NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
+    depends_on:
+      - auth-service
+      - catalog-service
+      - booking-service
+      - payment-service
+      - notification-service
+    networks:
+      - app-network
+
+  web-portal:
+    build:
+      context: ../web-portal
+      dockerfile: Dockerfile
+    container_name: tickid-web-portal
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - auth-service
+      - catalog-service
+      - booking-service
+      - payment-service
+      - notification-service
+      - gateway
+    networks:
+      - app-network
 
 networks:
   app-network:

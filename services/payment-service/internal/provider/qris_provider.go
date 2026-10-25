@@ -9,10 +9,10 @@ type QRISRequest struct {
 
 type QRISResponse struct {
 	ProviderPaymentID string
-	QRISReference      string
-	QRString           string
-	QRURL              string
-	ExpiredAt          time.Time
+	QRISReference     string
+	QRString          string
+	QRURL             string
+	ExpiredAt         time.Time
 }
 
 type QRISProvider interface {

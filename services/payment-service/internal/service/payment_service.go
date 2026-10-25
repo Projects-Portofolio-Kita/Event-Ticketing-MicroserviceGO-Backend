@@ -2,7 +2,11 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/dto"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/model"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/provider"
@@ -12,54 +16,40 @@ import (
 )
 
 type Reservation struct {
-	ID		uuid.UUID
-	UserID		uuid.UUID
-	TotalAmount	float64
-	Currency	string
-	ExpiredAt	time.Time
-	Status		string
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	TotalAmount float64
+	Currency    string
+	ExpiredAt   time.Time
+	Status      string
 }
 
 type BookingClient interface {
 	GetReservation(reservationID uuid.UUID) (*Reservation, error)
-}
-
-type MockBookingClient struct{}
-
-func NewMockBookingClient() *MockBookingClient {
-	return &MockBookingClient{}
-}
-
-func (c *MockBookingClient) GetReservation(reservationID uuid.UUID) (*Reservation, error) {
-	if reservationID == uuid.Nil {
-		return nil, errors.New("invalid reservation ID")
-	}
-	return &Reservation{
-		ID:          reservationID,
-		UserID:      uuid.New(),
-		TotalAmount: 100.00,
-		Currency:    "USD",
-		ExpiredAt:   time.Now().Add(24 * time.Hour),
-		Status:      "LOCKED",
-	}, nil
+	ConfirmReservation(reservationID uuid.UUID) error
 }
 
 type PaymentService struct {
-	repository *repository.PaymentRepository
+	repository   *repository.PaymentRepository
 	qrisProvider *provider.MockQRISProvider
-	booking BookingClient
+	booking      BookingClient
+	notifier     notify.Notifier
 }
 
-func NewPaymentService(repository *repository.PaymentRepository, qrisProvider *provider.MockQRISProvider, booking BookingClient) *PaymentService {
+func NewPaymentService(repository *repository.PaymentRepository, qrisProvider *provider.MockQRISProvider, booking BookingClient, notifier notify.Notifier) *PaymentService {
+	if notifier == nil {
+		notifier = notify.Noop()
+	}
 	return &PaymentService{
-		repository: repository,
+		repository:   repository,
 		qrisProvider: qrisProvider,
-		booking: booking,
+		booking:      booking,
+		notifier:     notifier,
 	}
 }
 
 func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Payment, error) {
-	
+
 	reservationID, err := uuid.Parse(req.ReservationID)
 	if err != nil {
 		return nil, errors.New("invalid reservation ID")
@@ -68,7 +58,7 @@ func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Pa
 		return nil, errors.New("invalid reservation ID")
 	}
 
-	if req.PaymentMethod != "QRIS" {
+	if strings.ToUpper(req.PaymentMethod) != "QRIS" {
 		return nil, errors.New("unsupported payment method and must be QRIS")
 	}
 
@@ -96,7 +86,7 @@ func (s *PaymentService) CreatePayment(req *dto.CreatePaymentRequest) (*model.Pa
 	}
 
 	payment := &model.Payment{
-		ID: 		  uuid.New(),
+		ID:            uuid.New(),
 		ReservationID: reservation.ID,
 		Amount:        reservation.TotalAmount,
 		Currency:      reservation.Currency,
@@ -134,4 +124,49 @@ func (s *PaymentService) GetPayment(id string) (*model.Payment, error) {
 	}
 
 	return s.repository.FindByID(paymentID)
+}
+
+func (s *PaymentService) ConfirmPayment(id string) (*model.Payment, error) {
+	paymentID, err := uuid.Parse(id)
+	if err != nil {
+		return nil, errors.New("invalid payment id")
+	}
+
+	payment, err := s.repository.FindByID(paymentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if payment.Status == model.PaymentSucceeded || payment.Status == model.PaymentConfirmed {
+		return payment, nil
+	}
+
+	if payment.Status != model.PaymentPending {
+		return nil, errors.New("payment is not in a pending state")
+	}
+
+	if time.Now().After(payment.ExpiredAt) {
+		payment.Status = model.PaymentExpired
+		_ = s.repository.Update(payment)
+		return nil, errors.New("payment has expired")
+	}
+
+	if err := s.booking.ConfirmReservation(payment.ReservationID); err != nil {
+		return nil, err
+	}
+
+	payment.Status = model.PaymentSucceeded
+	if err := s.repository.Update(payment); err != nil {
+		return nil, err
+	}
+
+	s.notifier.Send(notify.Message{
+		UserID:    payment.UserID.String(),
+		Kind:      notify.KindPaymentSucceeded,
+		Title:     "Pembayaran berhasil",
+		Body:      fmt.Sprintf("Pembayaran %s %.0f (%s) untuk reservasi %s diterima.", payment.Currency, payment.Amount, payment.ID, payment.ReservationID),
+		Reference: payment.ID.String(),
+	})
+
+	return payment, nil
 }

@@ -19,7 +19,7 @@ func (p *MockQRISProvider) CreatePayment(request QRISRequest) (*QRISResponse, er
 	return &QRISResponse{
 		ProviderPaymentID: "MOCK-" + paymentID,
 		QRISReference:     "QRIS-" + paymentID,
-		QRString:          fmt.Sprintf(
+		QRString: fmt.Sprintf(
 			"00020101021226670016COM.MOCK.QRIS0115MOCK-%s520458125303360540%d5802ID5910TICKID6007SURABAYA6304MOCK",
 			paymentID[:8],
 			int(request.Amount),

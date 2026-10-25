@@ -2,9 +2,11 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/health"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/handler"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/model"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/payment-service/internal/provider"
@@ -28,29 +30,27 @@ func main() {
 
 	qrisProvider := provider.NewMockQRISProvider()
 
-	bookingClient := service.NewMockBookingClient()
+	bookingClient := service.NewHTTPBookingClient()
 
 	paymentService := service.NewPaymentService(
 		paymentRepository,
 		qrisProvider,
 		bookingClient,
+		notify.New(),
 	)
 
 	paymentHandler := handler.NewPaymentHandler(paymentService)
 
 	router := gin.Default()
+	router.Use(cors.New())
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
-			"service": "payment-service",
-		})
-	})
+	health.Register(router, "payment-service")
 
 	api := router.Group("/api/v1")
 	{
 		api.POST("/payments", paymentHandler.CreatePayment)
 		api.GET("/payments/:id", paymentHandler.GetPayment)
+		api.POST("/payments/:id/confirm", paymentHandler.ConfirmPayment)
 	}
 
 	port := os.Getenv("SERVER_PORT")

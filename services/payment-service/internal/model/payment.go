@@ -1,9 +1,9 @@
 package model
 
 import (
-	"time"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"time"
 )
 
 type PaymentStatus string
@@ -20,7 +20,7 @@ const (
 type PaymentGateway string
 
 const (
-	PaymentGatewayXendit PaymentGateway = "XENDIT_QRIS"
+	PaymentGatewayXendit   PaymentGateway = "XENDIT_QRIS"
 	PaymentGatewayMidtrans PaymentGateway = "MIDTRANS_QRIS"
 )
 
@@ -33,7 +33,7 @@ type Payment struct {
 	QRString           string         `gorm:"type:text" json:"qr_string"`
 	QRURL              string         `gorm:"type:text" json:"qr_url"`
 	Amount             float64        `gorm:"type:decimal(12,2);not null" json:"amount"`
-	Currency            string         `gorm:"type:varchar(10);not null;default:'IDR'" json:"currency"`
+	Currency           string         `gorm:"type:varchar(10);not null;default:'IDR'" json:"currency"`
 	FailureDescription string         `gorm:"type:text" json:"failure_description"`
 	Gateway            PaymentGateway `gorm:"type:varchar(30);not null" json:"gateway"`
 	Status             PaymentStatus  `gorm:"type:varchar(20);not null;default:'PENDING'" json:"status"`

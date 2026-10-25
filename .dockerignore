@@ -1,0 +1,6 @@
+# Keep the Go build context small: only libs/ + <service>/ are needed.
+**/.git
+**/node_modules
+**/*.exe
+**/dist
+**/*.log
