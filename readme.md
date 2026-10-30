@@ -3,18 +3,31 @@
 Panduan singkat untuk membuat dan menjalankan service baru pada project:
 
 ```text
-Event-Ticketing-MicroserviceGO-Backend/
+backend/
 ├── services/
-│   ├── user-service/
-│   ├── catalog-service/
-│   ├── booking-service/
-│   ├── payment-service/
-│   └── notification-service/
+│   ├── auth-service/            # :8081  register/login/JWT/Google
+│   ├── catalog-service/         # :8082  events + seatmap
+│   ├── booking-service/         # :8083  reservasi & lock kursi
+│   ├── payment-service/         # :8084  QRIS (mock)
+│   └── notification-service/    # :8085  notifikasi pengguna
 ├── libs/
-├── contracts/
-├── gateway/
-├── docker-compose.yml
-└── README.md
+│   └── common/                  # Go module bersama: cors, health, httperr, notify
+├── gateway/                     # :8086 (host) -> :8080 (container), proxy tunggal
+├── contracts/                   # OpenAPI + skema event (dipakai bersama frontend)
+├── docker-compose.yml           # include ../infrastucture/docker-compose.yml (postgres)
+└── readme.md
+
+../infrastucture/                # postgres: satu-satunya definisi database
+../web-portal/                   # Vite/React portal, dev :3000
+```
+
+Stack penuh (database + 5 service + gateway + portal):
+
+```powershell
+docker compose -f backend/docker-compose.yml up -d --build
+# cek semuanya dalam satu request
+Invoke-RestMethod http://localhost:8086/health
+# atau per service: 8081 auth · 8082 catalog · 8083 booking · 8084 payment · 8085 notification
 ```
 
 ---
@@ -194,6 +207,43 @@ New-Item .gitignore
 New-Item Dockerfile
 New-Item README.md
 ```
+
+---
+
+# 4b. Menggunakan `libs/common`
+
+Semua service memakai satu modul Go bersama di `backend/libs/common`:
+
+| Paket | Fungsi |
+|---|---|
+| `cors` | Preflight CORS seragam (dulu disalin di tiap service) |
+| `health` | `GET /health` dengan payload `{"status","service"}` |
+| `httperr` | Envelope error `{"message": "..."}` |
+| `notify` | Client fire-and-forget ke notification-service |
+
+Tarik lewat `replace` lokal (diinisialisasi otomatis saat `go mod tidy`):
+
+```go.mod
+require github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common v0.0.0
+
+replace github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common => ../../libs/common
+```
+
+Pakai di `cmd/server/main.go`:
+
+```go
+router := gin.Default()
+router.Use(cors.New())
+health.Register(router, "my-service")
+```
+
+Dan di handler: `httperr.BadRequest(c, err.Error())`, di service:
+`notify.New()` lalu `notifier.Send(notify.Message{...})`.
+
+> **Penting untuk Docker:** `replace` lokal membuat path `../../libs/common`
+> wajib ada saat build, jadi **build context harus folder `backend/`**, bukan
+> folder service. Lihat `DockerFile` yang sudah ada — semua memakai
+> `context: .` + `dockerfile: services/<nama>/DockerFile` di compose.
 
 ---
 
@@ -818,6 +868,38 @@ Contract event:
 ```text
 contracts/events/
 ```
+
+---
+
+# 18b. Autentikasi & Otorisasi (`libs/common/authz`)
+
+Dua kredensial, dua arti berbeda:
+
+| Kredensial | Header | Dipakai untuk | Membuktikan |
+| --- | --- | --- | --- |
+| User JWT (HS256, diterbitkan auth-service) | `Authorization: Bearer <token>` | endpoint yang menyentuh data user (reservasi, pembayaran, daftar & tandai-notifikasi) | **siapa** pemanggil |
+| Service token | `X-Service-Token` | panggilan antar-service (payment → booking, catalog → seat-status, booking/payment → notification) | **apa** yang memanggil |
+
+Pemasangannya di `main.go`:
+
+```go
+jwtSecret := authz.RequireEnv("JWT_SECRET")       // gagal saat startup bila kosong
+serviceToken := authz.RequireEnv("SERVICE_TOKEN")
+
+api.POST("/reservations", authz.RequireUser(jwtSecret), h.CreateReservation)
+api.GET("/reservations/:id", authz.RequireUserOrService(jwtSecret, serviceToken), h.GetReservation)
+api.GET("/events/:eventId/seat-status", authz.RequireService(serviceToken), h.GetEventSeatStatus)
+```
+
+Aturan yang berlaku:
+
+- Identitas diambil dari token, **bukan** dari body request: `userId` di payload diabaikan, service memakai `authz.CallerFrom(c)`.
+- Ownership ditegakkan di lapisan service: pemanggil `Internal` (memakai `X-Service-Token`) melewati cek, selain itu wajib cocok dengan pemilik — melanggar menghasilkan `403`.
+- Keduanya **fail-closed**: secret atau token kosong berarti semua permintaan ditolak, bukan diizinkan.
+- Gateway **menghapus** `X-Service-Token` dari traffic publik dan sengaja tidak diberi `SERVICE_TOKEN`, sehingga kredensial internal tidak pernah bisa masuk dari internet.
+- Rute yang tidak dikenal di setiap service menjawab JSON `{"message": "..."}` (404), bukan plain text.
+
+Environment wajib (lihat `.env.example` tiap service): `JWT_SECRET` dengan nilai yang sama seperti auth-service di booking, payment, notification; `SERVICE_TOKEN` dengan nilai yang sama di catalog, booking, payment, notification.
 
 ---
 

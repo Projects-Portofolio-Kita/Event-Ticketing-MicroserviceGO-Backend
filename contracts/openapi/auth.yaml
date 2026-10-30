@@ -1,0 +1,391 @@
+openapi: 3.0.3
+info:
+  title: TickId Auth Service API
+  version: 1.1.0
+  description: |
+    Kontrak API auth-service (Go + Gin, port 8081).
+
+    Sumber kebenaran: `services/auth-service/cmd/server/main.go` (route),
+    `internal/dto`, `internal/model`, dan `internal/handler/auth_handler.go`.
+
+    Semua endpoint memakai prefix `/api/v1/auth` kecuali `/health`.
+
+    Bentuk error selalu `{"message": string}` (`dto.ErrorResponse`).
+    Response sukses berbentuk session (`SessionResponse`): field `accessToken`
+    dan `token` berisi JWT yang sama (kompatibilitas dengan web-portal
+    `src/services/auth.ts` yang membaca `token` ATAU `accessToken`).
+servers:
+  - url: http://localhost:8081
+    description: auth-service lokal
+tags:
+  - name: Health
+    description: Liveness probe
+  - name: Auth
+    description: Registrasi, login, refresh token, Google Sign-In, profil
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      responses:
+        "200":
+          description: Service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Registrasi akun email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Registrasi berhasil, session dibuat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid (binding error)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Email sudah terdaftar
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Pendaftaran gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Login email + password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid (binding error)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Email atau kata sandi salah
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Login gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshSession
+      summary: Rotasi refresh token menjadi session baru
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Session baru (refresh token lama di-revoke)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Refresh token tidak valid / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/auth/google:
+    post:
+      tags: [Auth]
+      operationId: loginWithGoogle
+      summary: Login dengan Google ID token (GIS)
+      description: |
+        auth-service memverifikasi `idToken` ke endpoint tokeninfo Google
+        (signature + expiry + `aud == GOOGLE_CLIENT_ID` + `email_verified`),
+        lalu menerbitkan JWT milik sendiri.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleRequest"
+      responses:
+        "200":
+          description: Login Google berhasil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionResponse"
+        "400":
+          description: Body tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Token Google tidak valid / kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Login Google gagal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Google login belum dikonfigurasi (GOOGLE_CLIENT_ID kosong)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Profil user pada session aktif
+      description: 'Dilindungi middleware `RequireAuth` — butuh `Authorization: Bearer <accessToken>`.'
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Profil user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Token tidak ada, tidak valid, kedaluwarsa, atau user tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      tags: [Auth]
+      operationId: updateCurrentUser
+      summary: Ubah nama / avatar milik sendiri
+      description: |
+        Satu-satunya profil yang boleh diedit user lewat API: `name` wajib
+        (1..100 karakter, di-trim), `avatar` bersifat URL (http/https,
+        maksimal 512 karakter).
+
+        Semantik `avatar`:
+        - field tidak dikirim (null) → avatar TIDAK diubah;
+        - `""` → avatar dihapus, klien jatuh ke inisial nama;
+        - URL valid → disimpan.
+
+        `email`, `password`, dan role tidak bisa diubah di sini.
+        Dilindungi middleware `RequireAuth` — identitas dari token.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Profil terbaru (bentuk sama dengan GET /me)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "400":
+          description: |
+            Body tidak valid, nama kosong/lebih dari 100 karakter, atau avatar
+            bukan URL http(s) / lebih dari 512 karakter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Token tidak ada/invalid, atau akun sudah tidak ada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal menyimpan perubahan profil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT (HS256) hasil `POST /api/v1/auth/login` dsb.
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: auth-service
+    RegisterRequest:
+      type: object
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 6
+          maxLength: 100
+        canPostEvent:
+          type: boolean
+          default: false
+          description: |
+            Opsional. Jika true, user menandai niat untuk mem-post event.
+            Tetap satu akun yang sama untuk booking dan posting.
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          minLength: 1
+          maxLength: 100
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          minLength: 10
+    GoogleRequest:
+      type: object
+      required: [idToken]
+      properties:
+        idToken:
+          type: string
+          minLength: 10
+          description: ID token Google Identity Services.
+    PublicUser:
+      type: object
+      required: [id, email, name, canPostEvent]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        avatar:
+          type: string
+          maxLength: 512
+          description: |
+            URL avatar (http/https). Hanya muncul bila akun punya avatar
+            (`omitempty` pada JSON); kosong/absen = klien memakai inisial.
+        canPostEvent:
+          type: boolean
+          description: User menandai akun ini ingin dipakai posting event.
+    UpdateProfileRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Nama tampilan baru (di-trim; kosong = 400).
+          example: Andi Pratama
+        avatar:
+          type: string
+          maxLength: 512
+          description: |
+            URL avatar baru. Opsional — tidak dikirim berarti tidak diubah;
+            string kosong menghapus avatar (fallback inisial).
+    SessionResponse:
+      type: object
+      required: [accessToken, token, refreshToken, user]
+      description: |
+        Bentuk session auth-service. `accessToken` dan `token` selalu diisi
+        dengan JWT yang sama; `user` memakai `PublicUser` (`avatar` opsional).
+      properties:
+        accessToken:
+          type: string
+          description: Access token JWT.
+        token:
+          type: string
+          description: Alias `accessToken` (kontrak lama web-portal).
+        refreshToken:
+          type: string
+          description: Refresh token opaque (di-hash sebelum disimpan).
+        user:
+          $ref: "#/components/schemas/PublicUser"
+    MeResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: "#/components/schemas/PublicUser"
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string

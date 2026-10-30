@@ -1,0 +1,24 @@
+# Build context is the backend/ root (see docker-compose.yml). libs/common is
+# a local Go module referenced through a `replace` directive in go.mod, so it
+# has to be inside the build context as well.
+FROM golang:1.27-alpine AS builder
+
+WORKDIR /app
+
+COPY libs/ ./libs/
+COPY services/payment-service/go.mod services/payment-service/go.sum ./services/payment-service/
+RUN cd services/payment-service && go mod download
+
+COPY services/payment-service/ ./services/payment-service/
+RUN cd services/payment-service && CGO_ENABLED=0 GOOS=linux go build -o /app/server ./cmd/server
+
+FROM alpine:3.19
+
+RUN apk --no-cache add ca-certificates
+
+WORKDIR /root/
+COPY --from=builder /app/server .
+
+EXPOSE 8084
+
+CMD ["./server"]

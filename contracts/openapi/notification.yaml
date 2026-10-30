@@ -1,0 +1,223 @@
+openapi: 3.0.3
+info:
+  title: TickId Notification Service API
+  version: 1.0.0
+  description: |
+    Kontrak API notification-service (Go + Gin, port 8085).
+
+    Sumber kebenaran: `services/notification-service/cmd/server/main.go`
+    (route), `internal/dto/notification_*.go`, `internal/handler/notification_handler.go`,
+    `internal/model/notification.go`.
+
+    Penulis notifikasi adalah service lain melalui client bersama
+    `libs/common/notify` (fire-and-forget). Baca juga `contracts/events/` untuk
+    daftar `kind` yang diproduksi booking- dan payment-service.
+
+    Bentuk error selalu `{"message": string}` (`libs/common/httperr`).
+servers:
+  - url: http://localhost:8085
+    description: notification-service lokal
+tags:
+  - name: Health
+    description: Health check
+  - name: Notifications
+    description: Penyimpanan dan pembacaan notifikasi pengguna
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      tags: [Health]
+      operationId: health
+      responses:
+        "200":
+          description: Service berjalan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/notifications:
+    post:
+      summary: Simpan notifikasi
+      description: |
+        Dipanggil oleh service lain (booking, payment) lewat `libs/common/notify`.
+        Tidak divalidasi JWT — service ini berada di jaringan internal dan tidak
+        diekspos ke publik selain lewat gateway.
+      tags: [Notifications]
+      operationId: createNotification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateNotificationRequest"
+      responses:
+        "201":
+          description: Notifikasi tersimpan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationResponse"
+        "400":
+          description: Payload tidak valid (binding JSON / UUID salah)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal menyimpan ke database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      summary: Daftar notifikasi milik satu pengguna
+      tags: [Notifications]
+      operationId: listNotifications
+      parameters:
+        - name: userId
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          description: Default 20, maksimum 100.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Daftar notifikasi, terbaru di urutan pertama
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationResponse"
+        "400":
+          description: Query tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/v1/notifications/{id}/read:
+    post:
+      summary: Tandai sudah dibaca (idempoten)
+      tags: [Notifications]
+      operationId: markNotificationRead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Notifikasi diperbarui; ReadAt kedua kali tidak berubah
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationResponse"
+        "400":
+          description: ID bukan UUID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Notifikasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: notification-service
+
+    ErrorResponse:
+      type: object
+      required: [message]
+      description: Envelope error bersama (`libs/common/httperr`).
+      properties:
+        message:
+          type: string
+
+    CreateNotificationRequest:
+      type: object
+      required: [userId, kind, title, body]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          maxLength: 40
+          description: >-
+            Salah satu dari reservation.locked, booking.confirmed,
+            booking.cancelled, payment.succeeded (lihat `libs/common/notify`).
+          example: booking.confirmed
+        title:
+          type: string
+          maxLength: 120
+          example: Tiket dikonfirmasi
+        body:
+          type: string
+          maxLength: 1000
+          example: Reservasi TICK-1792931922-8089 berstatus CONFIRMED. Total IDR 2150000.
+        reference:
+          type: string
+          maxLength: 64
+          description: ID terkait (reservasi/payment) untuk menelusuri asal notifikasi.
+          example: 6b08a0e3-d49f-4327-85ab-5ecd60797d6f
+
+    NotificationResponse:
+      type: object
+      required: [id, userId, kind, title, body, read, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        userId:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          example: booking.confirmed
+        title:
+          type: string
+        body:
+          type: string
+        reference:
+          type: string
+        read:
+          type: boolean
+          description: true bila `read_at` sudah terisi.
+        readAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time

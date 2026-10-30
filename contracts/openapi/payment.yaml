@@ -1,0 +1,200 @@
+openapi: 3.0.3
+info:
+  title: TickId Payment Service API
+  version: 1.0.0
+  description: |
+    Kontrak API payment-service (Go + Gin, port 8084) — pembayaran QRIS.
+
+    Sumber kebenaran: `services/payment-service/cmd/server/main.go` (route),
+    `internal/dto/payment_request.go`, `internal/handler/payment_handler.go`,
+    `internal/service/payment_service.go`, dan `internal/model/payment.go`.
+
+    Prefix `/api/v1` untuk endpoint bisnis, `/health` untuk liveness.
+
+    Catatan penting:
+    - Request memakai snake_case (`reservation_id`, `payment_method`); response
+      juga snake_case — berbeda dari auth/booking yang memakai camelCase.
+    - Error memakai `{"message": string}` — sama dengan service lain,
+      lewat `libs/common/httperr` (dulu `{"error": string}`, sudah diseragamkan).
+    - `payment_method` harus `QRIS` (case-insensitive).
+    - Provider dapat dipilih via env:
+      - `PAYMENT_PROVIDER=mock` (default)
+      - `PAYMENT_PROVIDER=midtrans` + `MIDTRANS_SERVER_KEY`
+    - `POST /payments/{id}/confirm` memanggil
+      `POST {booking-service}/api/v1/reservations/{id}/confirm` via HTTP
+      (belum ada message broker; lihat `contracts/events/`).
+    - Tidak ada middleware auth di server, sehingga operasi tidak punya `security`.
+
+    Spec lama `../../infrastucture/spec/docs.yml` sudah SUPERSEDED oleh file ini.
+servers:
+  - url: http://localhost:8084
+    description: payment-service lokal
+tags:
+  - name: Health
+    description: Liveness probe
+  - name: Payments
+    description: Pembuatan, pembacaan, dan konfirmasi pembayaran QRIS
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: healthCheck
+      summary: Health check
+      responses:
+        "200":
+          description: Service aktif
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /api/v1/payments:
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      summary: Buat pembayaran QRIS untuk sebuah reservasi
+      description: |
+        Reservasi harus berstatus `LOCKED` dan belum kedaluwarsa. Bila sudah
+        ada pembayaran untuk reservasi yang sama, pembayaran lama dikembalikan
+        (idempoten).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentRequest"
+      responses:
+        "201":
+          description: Pembayaran dibuat (status `PENDING`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "400":
+          description: Reservasi tidak valid, metode bukan QRIS, reservasi bukan LOCKED, atau sudah kedaluwarsa
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/payments/{id}:
+    get:
+      tags: [Payments]
+      operationId: getPayment
+      summary: Ambil pembayaran by ID
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Detail pembayaran
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "404":
+          description: Pembayaran tidak ditemukan atau ID bukan UUID valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/payments/{id}/confirm:
+    post:
+      tags: [Payments]
+      operationId: confirmPayment
+      summary: Konfirmasi pembayaran (PENDING -> SUCCEEDED)
+      description: |
+        Memanggil `POST {booking-service}/api/v1/reservations/{reservationId}/confirm`.
+        Bila reservasi tak bisa dikonfirmasi, pembayaran tidak diubah dan
+        dikembalikan 400. Pembayaran yang sudah `SUCCEEDED`/`CONFIRMED`
+        dikembalikan apa adanya (idempoten).
+      parameters:
+        - $ref: "#/components/parameters/PaymentId"
+      responses:
+        "200":
+          description: Pembayaran terkonfirmasi (status `SUCCEEDED`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentResponse"
+        "400":
+          description: Status bukan PENDING, sudah kedaluwarsa (diubah jadi EXPIRED), konfirmasi reservasi gagal, atau ID tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  parameters:
+    PaymentId:
+      name: id
+      in: path
+      required: true
+      description: Payment ID (UUID).
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: payment-service
+    ErrorResponse:
+      type: object
+      required: [message]
+      description: "Envelope error bersama (`libs/common/httperr`), sama dengan service lain."
+      properties:
+        message:
+          type: string
+    CreatePaymentRequest:
+      type: object
+      required: [reservation_id, payment_method]
+      properties:
+        reservation_id:
+          type: string
+          format: uuid
+        payment_method:
+          type: string
+          description: Hanya `QRIS` yang diterima (perbandingan case-insensitive).
+          enum: [QRIS]
+          example: QRIS
+    PaymentResponse:
+      type: object
+      required:
+        [
+          id,
+          reservation_id,
+          qr_string,
+          qr_url,
+          status,
+          amount,
+          currency,
+          expired_at,
+        ]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reservation_id:
+          type: string
+          format: uuid
+        qr_string:
+          type: string
+          description: String QRIS (payload EMV) dari provider.
+        qr_url:
+          type: string
+          description: URL gambar QRIS.
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, EXPIRED, SUCCEEDED, CANCELED, FAILED]
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+          example: IDR
+        expired_at:
+          type: string
+          format: date-time
