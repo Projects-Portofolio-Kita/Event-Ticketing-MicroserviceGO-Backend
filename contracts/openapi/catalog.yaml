@@ -1,22 +1,32 @@
 openapi: 3.0.3
 info:
   title: TickId Catalog Service API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Kontrak API catalog-service (Go + Gin, port 8082).
 
     Sumber kebenaran: `services/catalog-service/cmd/server/main.go` (route),
-    `internal/dto/catalog_response.go`, `internal/service/catalog_service.go`, dan
+    `internal/dto/catalog_response.go`, `internal/dto/event_request.go`,
+    `internal/dto/event_filter.go`, `internal/service/catalog_service.go`, dan
     `internal/handler/catalog_handler.go`.
 
-    Endpoint publik — tidak ada auth. Prefix `/api/v1` untuk endpoint bisnis,
+    Endpoint `GET` publik — tidak ada auth. `POST /api/v1/events` (posting
+    event) butuh `Authorization: Bearer <access token>`; identitas poster diambil
+    dari token, bukan dari body. Prefix `/api/v1` untuk endpoint bisnis,
     `/health` untuk liveness.
 
-    Ketersediaan kursi dimiliki booking-service; catalog-service memanggil
-    `GET /api/v1/events/{eventId}/seat-status` di booking-service dan
-    menurunkan statusnya menjadi `available | locked | sold`
-    (`CONFIRMED` -> `sold`, `LOCKED` -> `locked`, selain itu -> `available`).
-    Bila booking-service down, semua kursi diberi status `available`.
+    Dua mode penjualan (`saleMode`):
+    - `SEATED` — denah kursi bernomor; ketersediaan kursi dimiliki booking-service
+      (`GET .../seat-status`), status diturunkan menjadi
+      `available | locked | sold` (`CONFIRMED` -> `sold`, `LOCKED` -> `locked`,
+      selain itu -> `available`). Bila booking-service down, semua kursi `available`.
+    - `TIER` — tiket berbasis kuota (VIP/VVIP/Regular atau kustom). Tidak ada
+      kursi; stok = `quota` dikurangi yang terkunci/terjual dari booking-service
+      (`GET .../ticket-status`).
+
+    `GET /api/v1/events/{id}/tier-quotas` adalah feed internal (X-Service-Token)
+    yang dibaca booking-service saat checkout: harga dan kuota tiket selalu
+    dari server, klien tidak pernah menentukan harga.
 
     Error memakai `{"message": string}`.
 servers:
@@ -26,7 +36,7 @@ tags:
   - name: Health
     description: Liveness probe
   - name: Catalog
-    description: Daftar event dan peta kursi
+    description: Discovery event, detail, peta kursi, dan tiket berbasis kuota
 paths:
   /health:
     get:
@@ -44,14 +54,181 @@ paths:
     get:
       tags: [Catalog]
       operationId: listEvents
-      summary: Daftar event
+      summary: Daftar event (discovery)
+      description: |
+        Pencarian + filter discovery, diurutkan terbaru, dipaginasi.
+        Semua parameter opsional; nilai kosong berarti tanpa batasan.
+        Parameter tak dikenal diabaikan.
+      parameters:
+        - name: q
+          in: query
+          description: Pencarian teks bebas — cocok dengan nama, venue, deskripsi (case-insensitive).
+          schema:
+            type: string
+            maxLength: 200
+          example: coldplay
+        - name: city
+          in: query
+          description: Filter kota (exact, case-insensitive).
+          schema:
+            type: string
+            maxLength: 100
+          example: Jakarta
+        - name: category
+          in: query
+          description: Filter kategori event.
+          schema:
+            type: string
+            maxLength: 50
+            example: concert
+        - name: mode
+          in: query
+          description: Hanya mode penjualan tertentu.
+          schema:
+            type: string
+            enum: [SEATED, TIER]
+        - name: createdBy
+          in: query
+          description: Hanya event milik satu poster (UUID) — dipakai "Event Saya".
+          schema:
+            type: string
+            format: uuid
+        - name: mine
+          in: query
+          description: Shortcut CreatedBy = pemanggil (diisi handler; klien umumnya memakai `createdBy`).
+          schema:
+            type: boolean
+        - name: page
+          in: query
+          description: Halaman (default 1).
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: limit
+          in: query
+          description: Ukuran halaman (default 50, maksimum 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
       responses:
         "200":
-          description: Daftar event
+          description: Daftar event + total untuk paginasi
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/EventListResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Catalog]
+      operationId: createEvent
+      summary: Posting event baru (siap pesan)
+      description: |
+        Membuat event beserta kategorinya. Siapa pun yang login boleh membuat
+        event (identitas dari access token, `createdBy` diisi dari subject token).
+
+        `saleMode` menentukan cara jual:
+        - `SEATED` (default bila kosong) — seatmap dibuat otomatis
+          (`seatRows` x `seatsPerRow`, blok kiri `leftBlockSize`).
+        - `TIER` — tidak ada kursi; setiap kategori wajib punya `quota`.
+
+        `code` opsional — bila kosong di-slug dari `name` dan otomatis diberi
+        sufiks `-2`, `-3`, ... bila sudah dipakai; kode eksplisit yang sudah
+        dipakai ditolak 400.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventRequest"
+      responses:
+        "201":
+          description: Event berhasil dibuat (beserta seatmap bila SEATED)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+        "400":
+          description: Input tidak valid / kode duplikat / kuota hilang pada mode TIER
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal menulis database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/cities:
+    get:
+      tags: [Catalog]
+      operationId: listCities
+      summary: Kota tersedia untuk location picker
+      description: |
+        Mengembalikan kota unik beserta jumlah event yang berlangsung di
+        sana, diurutkan dari yang terbanyak. Memuat data menu lokasi di
+        navbar dan memfilter discovery.
+      responses:
+        "200":
+          description: Daftar kota + jumlah event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CityListResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{id}:
+    get:
+      tags: [Catalog]
+      operationId: getEvent
+      summary: Detail satu event
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Payload discovery/detail event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EventResponse"
+        "400":
+          description: "`id` bukan UUID valid"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Gagal membaca database
           content:
@@ -63,6 +240,10 @@ paths:
       tags: [Catalog]
       operationId: getSeatMap
       summary: Peta kursi per kategori untuk satu event
+      description: |
+        Hanya relevan untuk `saleMode: SEATED`. Setiap kursi membawa
+        `seatId` UUID asli dari database; statusnya digabungkan dengan feed
+        ketersediaan booking-service.
       parameters:
         - name: id
           in: path
@@ -79,7 +260,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/SeatMapResponse"
         "400":
-          description: '`id` bukan UUID valid (`invalid input: eventId`)'
+          description: "`id` bukan UUID valid (`invalid input: eventId`)"
           content:
             application/json:
               schema:
@@ -96,7 +277,115 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{id}/ticket-types:
+    get:
+      tags: [Catalog]
+      operationId: getTicketTypes
+      summary: Jenis tiket + sisa kuota (mode TIER)
+      description: |
+        Dipakai halaman detail event untuk menampilkan kartu tier
+        (VIP/VVIP/Regular atau kustom) beserta stepper jumlah. `remaining` =
+        `quota` dikurangi yang sudah terkunci/terjual di booking-service;
+        bila booking-service down, `remaining` = `quota` (gagal terbuka).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Daftar jenis tiket + mode penjualan event
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketTypeListResponse"
+        "400":
+          description: "`id` bukan UUID valid"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{id}/tier-quotas:
+    get:
+      tags: [Catalog]
+      operationId: getTierQuotas
+      summary: Feed internal harga + kuota tiket (service-to-service)
+      description: |
+        Dikonsumsi booking-service (`X-Service-Token`) sebelum reservasi TIER
+        dibuat: nama, harga, dan kuota setiap tier. Sumber kebenaran harga —
+        klien tidak pernah mengirim harga saat checkout.
+        Gateway menghapus header `X-Service-Token` dari trafik publik,
+        sehingga endpoint ini tidak bisa dipanggil dari luar.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      security:
+        - serviceToken: []
+      responses:
+        "200":
+          description: Daftar tier (nama, harga, kuota)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TierQuotaListResponse"
+        "400":
+          description: "`id` bukan UUID valid"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid `X-Service-Token`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal membaca database
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token JWT (HS256) hasil `POST /api/v1/auth/login` dsb.
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: |
+        Token internal bersama antar-service (env `SERVICE_TOKEN`).
+        Dihapus gateway untuk trafik publik — hanya dipakai service-to-service.
   schemas:
     HealthResponse:
       type: object
@@ -116,25 +405,151 @@ components:
           type: string
     EventListResponse:
       type: object
-      required: [events]
+      required: [events, total]
       properties:
         events:
           type: array
           items:
             $ref: "#/components/schemas/EventResponse"
+        total:
+          type: integer
+          description: Jumlah event yang cocok dengan filter (untuk paginasi).
+          example: 7
     EventResponse:
       type: object
-      required: [id, code, name, venue]
+      required: [id, code, name, venue, eventDate, city, category, saleMode, minPrice, ticketTypeCount]
       properties:
         id:
           type: string
           format: uuid
         code:
           type: string
+          example: coldplay-music-of-the-spheres
         name:
           type: string
+          example: Coldplay - Music Of The Spheres
         venue:
           type: string
+          example: Stora Gelora Bung Karno
+        eventDate:
+          type: string
+          description: RFC3339 (bisa dengan offset zona waktu).
+          format: date-time
+          example: 2026-06-15T19:30:00+07:00
+        city:
+          type: string
+          example: Jakarta
+        category:
+          type: string
+          description: Kategori event (concert, festival, sports, seminar, theater, workshop, other).
+          example: concert
+        saleMode:
+          type: string
+          enum: [SEATED, TIER]
+          description: SEATED = denah kursi, TIER = kuota tiket.
+        description:
+          type: string
+        posterUrl:
+          type: string
+        minPrice:
+          type: number
+          format: double
+          description: Harga kategori/tiket termurah; 0 bila belum ada kategori.
+          example: 350000
+        ticketTypeCount:
+          type: integer
+          description: Jumlah kategori/tier yang dijual event ini.
+          example: 3
+        createdBy:
+          type: string
+          format: uuid
+          description: Subject access token (poster). Tidak ada untuk event seed.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CityEntry:
+      type: object
+      required: [city, count]
+      properties:
+        city:
+          type: string
+          example: Jakarta
+        count:
+          type: integer
+          description: Jumlah event di kota tersebut.
+          example: 3
+    CityListResponse:
+      type: object
+      required: [cities]
+      properties:
+        cities:
+          type: array
+          items:
+            $ref: "#/components/schemas/CityEntry"
+    TicketTypeResponse:
+      type: object
+      required: [categoryId, name, price, quota, remaining]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: VIP
+        description:
+          type: string
+          example: Area premium berdiri
+        price:
+          type: number
+          format: double
+          example: 1500000
+        quota:
+          type: integer
+          description: Total stok yang dikonfigurasi poster.
+          example: 150
+        remaining:
+          type: integer
+          description: Sisa tiket (quota - terkunci/terjual). 0 = habis.
+          example: 42
+    TicketTypeListResponse:
+      type: object
+      required: [saleMode, ticketTypes]
+      properties:
+        saleMode:
+          type: string
+          enum: [SEATED, TIER]
+        ticketTypes:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketTypeResponse"
+    TierQuota:
+      type: object
+      required: [categoryId, name, price, quota]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: VVIP
+        price:
+          type: number
+          format: double
+          example: 2500000
+        quota:
+          type: integer
+          example: 50
+    TierQuotaListResponse:
+      type: object
+      required: [tiers]
+      properties:
+        tiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/TierQuota"
     SeatMapResponse:
       type: object
       required: [categories]
@@ -199,3 +614,115 @@ components:
         price:
           type: number
           format: double
+    CreateEventCategory:
+      type: object
+      required: [name, price]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          example: VIP
+        price:
+          type: number
+          format: double
+          minimum: 0
+          example: 1500000
+        quota:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          description: |
+            Wajib untuk mode `TIER` (kuota tiket yang boleh terjual);
+            diabaikan untuk mode `SEATED`.
+          example: 100
+        description:
+          type: string
+          maxLength: 500
+          description: Deskripsi tier/kategori (opsional).
+          example: Akses masuk lebih awal + area premium
+    CreateEventRequest:
+      type: object
+      required: [name, venue, eventDate, categories]
+      properties:
+        code:
+          type: string
+          maxLength: 50
+          description: Opsional; di-slug dari `name` bila kosong, wajib unik bila diisi.
+          example: konser-nusantara-2026
+        name:
+          type: string
+          maxLength: 255
+          example: Konser Nusantara 2026
+        venue:
+          type: string
+          maxLength: 255
+          example: GBK Jakarta
+        eventDate:
+          type: string
+          description: RFC3339 (`2026-06-15T19:30:00+07:00`) atau tanggal polos (`2026-06-15`).
+          example: 2026-06-15T19:30:00+07:00
+        city:
+          type: string
+          maxLength: 100
+          description: Kota penyelenggaraan (mengisi location picker / filter discovery).
+          example: Jakarta
+        category:
+          type: string
+          maxLength: 50
+          description: Kategori event (concert, festival, sports, seminar, theater, workshop, other).
+          example: concert
+        description:
+          type: string
+          maxLength: 2000
+        posterUrl:
+          type: string
+          maxLength: 512
+          description: URL gambar poster (http/https).
+        saleMode:
+          type: string
+          maxLength: 10
+          enum: [SEATED, TIER]
+          default: SEATED
+          description: |
+            `SEATED` membuat denah kursi otomatis; `TIER` menjual tiket
+            berbasis kuota (setiap kategori wajib punya `quota`).
+        seatRows:
+          type: integer
+          minimum: 1
+          maximum: 26
+          default: 4
+          description: Jumlah baris kursi otomatis (A..Z). Hanya mode SEATED.
+        seatsPerRow:
+          type: integer
+          minimum: 2
+          maximum: 60
+          default: 16
+          description: Jumlah kursi pada tiap baris. Hanya mode SEATED.
+        leftBlockSize:
+          type: integer
+          minimum: 1
+          maximum: 30
+          default: 8
+          description: |
+            Batas blok kiri. Kursi `1..leftBlockSize` dianggap sisi kiri,
+            sisanya sisi kanan. Hanya mode SEATED.
+        payoutBankName:
+          type: string
+          maxLength: 100
+          description: Nama bank rekening payout organizer (opsional).
+        payoutAccountNumber:
+          type: string
+          maxLength: 50
+          description: Nomor rekening payout organizer (opsional).
+        payoutAccountName:
+          type: string
+          maxLength: 100
+          description: Nama pemilik rekening payout organizer (opsional).
+        categories:
+          type: array
+          minItems: 1
+          maxItems: 10
+          description: |
+            Kategori kursi (SEATED) atau jenis tiket berkuota (TIER).
+          items:
+            $ref: "#/components/schemas/CreateEventCategory"

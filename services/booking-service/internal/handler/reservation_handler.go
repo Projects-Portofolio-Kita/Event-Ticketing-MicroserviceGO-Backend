@@ -33,8 +33,10 @@ func writeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrForbidden):
 		httperr.JSON(c, http.StatusForbidden, err.Error())
-	case errors.Is(err, service.ErrSeatsUnavailable):
+	case errors.Is(err, service.ErrSeatsUnavailable), errors.Is(err, service.ErrTicketsUnavailable):
 		httperr.JSON(c, http.StatusConflict, err.Error())
+	case errors.Is(err, service.ErrEventNotFound):
+		httperr.NotFound(c, err.Error())
 	case errors.Is(err, service.ErrInvalidInput):
 		httperr.JSON(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, gorm.ErrRecordNotFound):
@@ -71,6 +73,28 @@ func (h *ReservationHandler) GetReservation(c *gin.Context) {
 	c.JSON(http.StatusOK, toResponse(reservation))
 }
 
+// ListReservations answers GET /reservations with the caller's own bookings
+// ("Tiket Saya"), seats and tier items alike.
+func (h *ReservationHandler) ListReservations(c *gin.Context) {
+	var query struct {
+		Limit int `form:"limit"`
+	}
+	_ = c.ShouldBindQuery(&query)
+
+	reservations, err := h.service.ListReservations(caller(c), query.Limit)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+
+	responses := make([]dto.ReservationResponse, 0, len(reservations))
+	for i := range reservations {
+		responses = append(responses, toResponse(&reservations[i]))
+	}
+
+	c.JSON(http.StatusOK, gin.H{"reservations": responses})
+}
+
 func (h *ReservationHandler) GetEventSeatStatus(c *gin.Context) {
 	statuses, err := h.service.GetSeatStatus(c.Param("eventId"))
 	if err != nil {
@@ -79,6 +103,18 @@ func (h *ReservationHandler) GetEventSeatStatus(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"seats": statuses})
+}
+
+// GetEventTicketStatus answers GET /events/:eventId/ticket-status: the tier
+// availability feed catalog-service reads behind X-Service-Token.
+func (h *ReservationHandler) GetEventTicketStatus(c *gin.Context) {
+	statuses, err := h.service.GetEventTicketStatus(c.Param("eventId"))
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"tickets": statuses})
 }
 
 func (h *ReservationHandler) ConfirmReservation(c *gin.Context) {
@@ -113,16 +149,34 @@ func toResponse(reservation *model.Reservation) dto.ReservationResponse {
 		})
 	}
 
+	items := make([]dto.TicketItemResponse, 0, len(reservation.Items))
+	for _, item := range reservation.Items {
+		items = append(items, dto.TicketItemResponse{
+			CategoryID:   item.CategoryID.String(),
+			CategoryName: item.CategoryName,
+			Quantity:     item.Quantity,
+			UnitPrice:    item.UnitPrice,
+			Subtotal:     item.Subtotal,
+		})
+	}
+
+	mode := reservation.Mode
+	if mode == "" {
+		mode = model.ReservationModeSeated
+	}
+
 	return dto.ReservationResponse{
 		ReservationID: reservation.ID.String(),
 		UserID:        reservation.UserID.String(),
 		EventID:       reservation.EventID.String(),
 		BookingRef:    reservation.BookingRef,
 		Status:        string(reservation.Status),
+		Mode:          string(mode),
 		ExpiresAt:     reservation.ExpiresAt,
 		TotalAmount:   reservation.TotalAmount,
 		Currency:      reservation.Currency,
 		Seats:         seats,
+		Items:         items,
 		CreatedAt:     reservation.CreatedAt,
 	}
 }

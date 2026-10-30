@@ -21,6 +21,7 @@ type User struct {
 	Email        string       `gorm:"type:varchar(255);uniqueIndex;not null" json:"email"`
 	PasswordHash string       `gorm:"type:varchar(255);not null;default:''" json:"-"`
 	AvatarURL    string       `gorm:"type:varchar(512);not null;default:''" json:"avatarUrl,omitempty"`
+	CanPostEvent bool         `gorm:"not null;default:false" json:"canPostEvent"`
 	Provider     AuthProvider `gorm:"type:varchar(20);not null;default:'local'" json:"provider"`
 	// GoogleSub is NULL for locally-registered accounts. It must stay a
 	// pointer: a plain "" would collide with the unique index on the second
@@ -39,17 +40,19 @@ func (u *User) BeforeCreate(tx *gorm.DB) error {
 
 // PublicUser is the safe profile shape returned to clients.
 type PublicUser struct {
-	ID     string `json:"id"`
-	Email  string `json:"email"`
-	Name   string `json:"name"`
-	Avatar string `json:"avatar,omitempty"`
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	Name         string `json:"name"`
+	Avatar       string `json:"avatar,omitempty"`
+	CanPostEvent bool   `json:"canPostEvent"`
 }
 
 func (u *User) Public() PublicUser {
 	return PublicUser{
-		ID:     u.ID.String(),
-		Email:  u.Email,
-		Name:   u.Name,
-		Avatar: u.AvatarURL,
+		ID:           u.ID.String(),
+		Email:        u.Email,
+		Name:         u.Name,
+		Avatar:       u.AvatarURL,
+		CanPostEvent: u.CanPostEvent,
 	}
 }

@@ -7,14 +7,14 @@ tokens, rotating opaque refresh tokens, Google Sign-In verification, and a
 
 ## Endpoints
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| GET | `/health` | — | Liveness probe |
-| POST | `/api/v1/auth/register` | — | `{name,email,password}` → 201 session |
-| POST | `/api/v1/auth/login` | — | `{email,password}` → 200 session |
-| POST | `/api/v1/auth/refresh` | — | `{refreshToken}` → 200 rotated session |
-| POST | `/api/v1/auth/google` | — | `{idToken}` (GIS) → 200 session |
-| GET | `/api/v1/auth/me` | Bearer JWT | Current user profile |
+| Method | Path                    | Auth       | Description                                         |
+| ------ | ----------------------- | ---------- | --------------------------------------------------- |
+| GET    | `/health`               | —          | Liveness probe                                      |
+| POST   | `/api/v1/auth/register` | —          | `{name,email,password,canPostEvent?}` → 201 session |
+| POST   | `/api/v1/auth/login`    | —          | `{email,password}` → 200 session                    |
+| POST   | `/api/v1/auth/refresh`  | —          | `{refreshToken}` → 200 rotated session              |
+| POST   | `/api/v1/auth/google`   | —          | `{idToken}` (GIS) → 200 session                     |
+| GET    | `/api/v1/auth/me`       | Bearer JWT | Current user profile                                |
 
 Session shape (matches the web-portal contract):
 
@@ -23,7 +23,12 @@ Session shape (matches the web-portal contract):
   "accessToken": "<jwt>",
   "token": "<jwt>",
   "refreshToken": "<opaque>",
-  "user": { "id": "<uuid>", "email": "a@b.com", "name": "Nama" }
+  "user": {
+    "id": "<uuid>",
+    "email": "a@b.com",
+    "name": "Nama",
+    "canPostEvent": true
+  }
 }
 ```
 

@@ -28,6 +28,7 @@ func TestRegisterRequestBinding(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid request", `{"name":"Alice","email":"alice@example.com","password":"secret1"}`, false},
+		{"valid request with canPostEvent", `{"name":"Alice","email":"alice@example.com","password":"secret1","canPostEvent":true}`, false},
 		{"password below minimum length", `{"name":"Alice","email":"alice@example.com","password":"abc"}`, true},
 		{"missing password", `{"name":"Alice","email":"alice@example.com"}`, true},
 		{"invalid email", `{"name":"Alice","email":"not-an-email","password":"secret1"}`, true},

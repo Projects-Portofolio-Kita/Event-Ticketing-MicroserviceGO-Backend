@@ -74,6 +74,8 @@ func main() {
 		api.POST("/refresh", authHandler.Refresh)
 		api.POST("/google", authHandler.Google)
 		api.GET("/me", middleware.RequireAuth(jwtManager), authHandler.Me)
+		// Edit the signed-in user's own profile (name / avatar URL).
+		api.PATCH("/me", middleware.RequireAuth(jwtManager), authHandler.UpdateMe)
 	}
 
 	port := os.Getenv("SERVER_PORT")

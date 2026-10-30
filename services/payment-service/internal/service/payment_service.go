@@ -46,12 +46,12 @@ type paymentStore interface {
 
 type PaymentService struct {
 	repository   paymentStore
-	qrisProvider *provider.MockQRISProvider
+	qrisProvider provider.QRISProvider
 	booking      BookingClient
 	notifier     notify.Notifier
 }
 
-func NewPaymentService(repository paymentStore, qrisProvider *provider.MockQRISProvider, booking BookingClient, notifier notify.Notifier) *PaymentService {
+func NewPaymentService(repository paymentStore, qrisProvider provider.QRISProvider, booking BookingClient, notifier notify.Notifier) *PaymentService {
 	if notifier == nil {
 		notifier = notify.Noop()
 	}

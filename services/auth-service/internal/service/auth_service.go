@@ -22,6 +22,8 @@ var (
 	ErrInvalidCredentials  = errors.New("invalid email or password")
 	ErrGoogleNotConfigured = errors.New("google login is not configured")
 	ErrGoogleTokenInvalid  = errors.New("google token is invalid")
+	ErrInvalidProfile      = errors.New("data profil tidak valid")
+	ErrUserNotFound        = errors.New("user not found")
 )
 
 // userStore is the consumer-side slice of repository.UserRepository that the
@@ -32,6 +34,7 @@ type userStore interface {
 	FindByEmail(email string) (*model.User, error)
 	FindByID(id uuid.UUID) (*model.User, error)
 	FindByGoogleSub(sub string) (*model.User, error)
+	UpdateUser(user *model.User) error
 	SaveRefreshToken(userID uuid.UUID, tokenHash string, expiresAt time.Time) error
 	FindValidRefreshToken(tokenHash string) (*model.RefreshToken, error)
 	RevokeRefreshToken(id uuid.UUID) error
@@ -78,7 +81,7 @@ func (s *AuthService) issueSession(user *model.User) (dto.SessionResponse, error
 	}, nil
 }
 
-func (s *AuthService) Register(name, email, password string) (dto.SessionResponse, error) {
+func (s *AuthService) Register(name, email, password string, canPostEvent bool) (dto.SessionResponse, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return dto.SessionResponse{}, err
@@ -87,6 +90,7 @@ func (s *AuthService) Register(name, email, password string) (dto.SessionRespons
 		Name:         strings.TrimSpace(name),
 		Email:        normalizeEmail(email),
 		PasswordHash: string(hash),
+		CanPostEvent: canPostEvent,
 		Provider:     model.ProviderLocal,
 	}
 	if err := s.repo.CreateUser(user); err != nil {
@@ -203,4 +207,40 @@ func (s *AuthService) LoginWithGoogle(idToken string) (dto.SessionResponse, erro
 
 func (s *AuthService) Me(userID uuid.UUID) (*model.User, error) {
 	return s.repo.FindByID(userID)
+}
+
+// UpdateProfile edits the signed-in user's display name and avatar URL — the
+// only fields a user may change about themselves (email, password and roles
+// are out of scope here). The avatar is URL-based for now: an empty string
+// clears it so the client can fall back to initials.
+func (s *AuthService) UpdateProfile(userID uuid.UUID, name string, avatar *string) (*model.User, error) {
+	user, err := s.repo.FindByID(userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	trimmedName := strings.TrimSpace(name)
+	if trimmedName == "" || len(trimmedName) > 100 {
+		return nil, fmt.Errorf("%w: nama wajib diisi, maksimal 100 karakter", ErrInvalidProfile)
+	}
+	user.Name = trimmedName
+
+	if avatar != nil {
+		trimmedAvatar := strings.TrimSpace(*avatar)
+		if trimmedAvatar != "" {
+			isHTTP := strings.HasPrefix(trimmedAvatar, "http://") || strings.HasPrefix(trimmedAvatar, "https://")
+			if !isHTTP || len(trimmedAvatar) > 512 {
+				return nil, fmt.Errorf("%w: avatar harus URL http(s) maksimal 512 karakter", ErrInvalidProfile)
+			}
+		}
+		user.AvatarURL = trimmedAvatar
+	}
+
+	if err := s.repo.UpdateUser(user); err != nil {
+		return nil, err
+	}
+	return user, nil
 }

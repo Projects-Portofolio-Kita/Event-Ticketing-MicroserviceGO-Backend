@@ -63,6 +63,11 @@ func (r *UserRepository) FindByGoogleSub(sub string) (*model.User, error) {
 	return &user, nil
 }
 
+// UpdateUser persists an edited profile (name / avatar URL).
+func (r *UserRepository) UpdateUser(user *model.User) error {
+	return r.db.Save(user).Error
+}
+
 func (r *UserRepository) SaveRefreshToken(userID uuid.UUID, tokenHash string, expiresAt time.Time) error {
 	return r.db.Create(&model.RefreshToken{
 		UserID:    userID,

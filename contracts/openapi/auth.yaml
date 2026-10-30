@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: TickId Auth Service API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Kontrak API auth-service (Go + Gin, port 8081).
 
@@ -204,6 +204,57 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      tags: [Auth]
+      operationId: updateCurrentUser
+      summary: Ubah nama / avatar milik sendiri
+      description: |
+        Satu-satunya profil yang boleh diedit user lewat API: `name` wajib
+        (1..100 karakter, di-trim), `avatar` bersifat URL (http/https,
+        maksimal 512 karakter).
+
+        Semantik `avatar`:
+        - field tidak dikirim (null) → avatar TIDAK diubah;
+        - `""` → avatar dihapus, klien jatuh ke inisial nama;
+        - URL valid → disimpan.
+
+        `email`, `password`, dan role tidak bisa diubah di sini.
+        Dilindungi middleware `RequireAuth` — identitas dari token.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Profil terbaru (bentuk sama dengan GET /me)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "400":
+          description: |
+            Body tidak valid, nama kosong/lebih dari 100 karakter, atau avatar
+            bukan URL http(s) / lebih dari 512 karakter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Token tidak ada/invalid, atau akun sudah tidak ada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Gagal menyimpan perubahan profil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -238,6 +289,12 @@ components:
           type: string
           minLength: 6
           maxLength: 100
+        canPostEvent:
+          type: boolean
+          default: false
+          description: |
+            Opsional. Jika true, user menandai niat untuk mem-post event.
+            Tetap satu akun yang sama untuk booking dan posting.
     LoginRequest:
       type: object
       required: [email, password]
@@ -267,7 +324,7 @@ components:
           description: ID token Google Identity Services.
     PublicUser:
       type: object
-      required: [id, email, name]
+      required: [id, email, name, canPostEvent]
       properties:
         id:
           type: string
@@ -279,7 +336,29 @@ components:
           type: string
         avatar:
           type: string
-          description: Hanya muncul bila akun punya avatar (`omitempty` pada JSON).
+          maxLength: 512
+          description: |
+            URL avatar (http/https). Hanya muncul bila akun punya avatar
+            (`omitempty` pada JSON); kosong/absen = klien memakai inisial.
+        canPostEvent:
+          type: boolean
+          description: User menandai akun ini ingin dipakai posting event.
+    UpdateProfileRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Nama tampilan baru (di-trim; kosong = 400).
+          example: Andi Pratama
+        avatar:
+          type: string
+          maxLength: 512
+          description: |
+            URL avatar baru. Opsional — tidak dikirim berarti tidak diubah;
+            string kosong menghapus avatar (fallback inisial).
     SessionResponse:
       type: object
       required: [accessToken, token, refreshToken, user]

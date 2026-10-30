@@ -10,6 +10,7 @@ import (
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/health"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/httperr"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/notify"
+	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/client"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/handler"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/model"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/services/booking-service/internal/repository"
@@ -29,12 +30,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := db.AutoMigrate(&model.Reservation{}, &model.ReservationSeat{}); err != nil {
+	if err := db.AutoMigrate(&model.Reservation{}, &model.ReservationSeat{}, &model.ReservationItem{}); err != nil {
 		log.Fatal(err)
 	}
 
 	reservationRepository := repository.NewReservationRepository(db)
-	reservationService := service.NewReservationService(reservationRepository, notify.New())
+	// Tier bookings read prices/quotas from catalog-service (X-Service-Token).
+	catalogClient := client.NewHTTPCatalogClient()
+	reservationService := service.NewReservationService(reservationRepository, catalogClient, notify.New())
 	reservationHandler := handler.NewReservationHandler(reservationService)
 
 	router := gin.Default()
@@ -56,13 +59,16 @@ func main() {
 		// Writes always act on the caller's own account: the service derives
 		// the owner from the token, ignoring userId in the body.
 		api.POST("/reservations", requireUser, reservationHandler.CreateReservation)
+		// The caller's own booking history ("Tiket Saya"), seats and tiers.
+		api.GET("/reservations", requireUser, reservationHandler.ListReservations)
 		// Reads, confirm and cancel are open to the owner and to
 		// payment-service (X-Service-Token); the service enforces ownership.
 		api.GET("/reservations/:id", requireUserOrService, reservationHandler.GetReservation)
 		api.POST("/reservations/:id/confirm", requireUserOrService, reservationHandler.ConfirmReservation)
 		api.POST("/reservations/:id/cancel", requireUserOrService, reservationHandler.CancelReservation)
-		// Read-only availability feed consumed by catalog-service.
+		// Read-only availability feeds consumed by catalog-service.
 		api.GET("/events/:eventId/seat-status", authz.RequireService(serviceToken), reservationHandler.GetEventSeatStatus)
+		api.GET("/events/:eventId/ticket-status", authz.RequireService(serviceToken), reservationHandler.GetEventTicketStatus)
 	}
 
 	port := os.Getenv("SERVER_PORT")

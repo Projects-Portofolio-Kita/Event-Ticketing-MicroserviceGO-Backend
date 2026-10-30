@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
   title: TickId Booking Service API
-  version: 1.0.0
+  version: 1.1.0
   description: |
-    Kontrak API booking-service (Go + Gin, port 8083) — reservasi / seat lock.
+    Kontrak API booking-service (Go + Gin, port 8083) — reservasi tiket.
 
     Sumber kebenaran: route di
     `services/booking-service/cmd/server/main.go`,
@@ -12,11 +12,24 @@ info:
 
     Prefix `/api/v1` untuk endpoint bisnis, `/health` untuk liveness.
 
-    Catatan auth: web-portal (`../web-portal/src/services/booking.ts`) mengirim
-    header `Authorization: Bearer <accessToken>` pada `POST /api/v1/reservations`,
-    tetapi booking-service saat ini TIDAK memverifikasi JWT di server
-    (tidak ada middleware `RequireAuth` di `cmd/server/main.go`) — oleh karena
-    itu operasi di bawah tidak memiliki `security`.
+    Dua mode reservasi (`mode`), mengikuti `saleMode` event di catalog-service:
+    - `SEATED` — lock kursi bernomor dari denah; klien mengirim baris `seats`.
+    - `TIER` — tiket berbasis kuota (VIP/VVIP/Regular/kustom); klien hanya
+      mengirim `categoryId` + `quantity`. Nama, harga, dan kuota diambil dari
+      catalog-service (`GET /events/:id/tier-quotas`, `X-Service-Token`) —
+      klien tidak pernah menentukan harga. Kuota dicek di dalam transaksi
+      dengan advisory lock per tier, sehingga pembeli paralel tidak bisa
+      oversell; maksimal 10 tiket per reservasi.
+
+    Catatan auth (identitas SELALU dari token, bukan body):
+    - `POST /api/v1/reservations`, `GET /api/v1/reservations` — user login
+      (`Authorization: Bearer <access token>`). Field `userId` di body diterima
+      untuk kompatibilitas tetapi DIABAIKAN.
+    - `GET /reservations/:id`, `confirm`, `cancel` — pemilik ATAU service
+      (`X-Service-Token`, dipakai payment-service). Service enforces kepemilikan.
+    - `GET /events/:eventId/seat-status` dan `ticket-status` — hanya
+      `X-Service-Token` (dikonsumsi catalog-service; gateway menghapus header
+      itu dari trafik publik).
 
     TTL reservasi 5 menit (`reservationTTL`), status awal `LOCKED`.
     Error selalu `{"message": string}`.
@@ -27,9 +40,9 @@ tags:
   - name: Health
     description: Liveness probe
   - name: Reservations
-    description: Pembuatan dan pengelolaan reservasi kursi
-  - name: SeatStatus
-    description: Status kursi per event (dipakai catalog-service)
+    description: Pembuatan dan pengelolaan reservasi (kursi atau tiket berkuota)
+  - name: Availability
+    description: Feed ketersediaan (kursi + tiket) untuk catalog-service
 paths:
   /health:
     get:
@@ -47,7 +60,16 @@ paths:
     post:
       tags: [Reservations]
       operationId: createReservation
-      summary: Buat reservasi (lock kursi)
+      summary: Buat reservasi (lock kursi atau tiket)
+      description: |
+        Membuat reservasi untuk user yang sedang login. `mode` diambil dari
+        payload bila diisi, kalau kosong disimpulkan dari isi (ada `items` →
+        `TIER`, selain itu `SEATED`); mode selalu divalidasi terhadap
+        isinya, jadi baris kursi dan baris tiket tidak bisa tercampur.
+
+        Pemilik diambil dari token, bukan dari body.
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -62,13 +84,67 @@ paths:
               schema:
                 $ref: "#/components/schemas/ReservationResponse"
         "400":
-          description: Input tidak valid (UUID salah / minimal satu kursi / binding error)
+          description: |
+            Input tidak valid (UUID salah / minimal satu baris / `mode` tidak
+            dikenal / `mode` tidak cocok dengan isi / kuantitas di luar 1..10)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid access token (atau `X-Service-Token` tidak cocok)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Event tidak ditemukan di catalog-service (`ErrEventNotFound`, mode TIER)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: Sebagian kursi sudah di-lock atau terjual (`ErrSeatsUnavailable`)
+          description: |
+            Kursi sudah di-lock/terjual (`ErrSeatsUnavailable`) ATAU kuota
+            tiket habis / tier tidak dijual di event ini
+            (`ErrTicketsUnavailable`) — pesan menyebut sisa kuota per tier.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      tags: [Reservations]
+      operationId: listReservations
+      summary: Daftar reservasi milik pemanggil ("Tiket Saya")
+      description: |
+        Reservasi milik user yang sedang login, terbaru dulu, lengkap dengan
+        baris kursi maupun baris tiket. Pemilik diambil dari token.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          description: Jumlah maksimum (default 20, maksimum 100).
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Daftar reservasi milik pemanggil
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReservationListResponse"
+        "400":
+          description: Token tidak punya subject user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid access token
           content:
             application/json:
               schema:
@@ -77,7 +153,10 @@ paths:
     get:
       tags: [Reservations]
       operationId: getReservation
-      summary: Ambil reservasi by ID
+      summary: Ambil reservasi by ID (pemilik atau service)
+      security:
+        - bearerAuth: []
+        - serviceToken: []
       parameters:
         - $ref: "#/components/parameters/ReservationId"
       responses:
@@ -87,6 +166,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReservationResponse"
+        "403":
+          description: Pemanggil bukan pemilik reservasi (`ErrForbidden`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           description: Reservasi tidak ditemukan atau ID bukan UUID valid
           content:
@@ -100,9 +185,12 @@ paths:
       summary: Konfirmasi reservasi (LOCKED -> CONFIRMED)
       description: |
         Dipanggil payment-service setelah pembayaran sukses
-        (`internal/service/booking_client.go`). Bila reservasi bukan `LOCKED`
-        atau sudah lewat `expiresAt`, mengembalikan 400 (reservasi yang lewat
-        tempo diubah menjadi `EXPIRED`).
+        (dengan `X-Service-Token`) — pemilik juga boleh. Bila reservasi bukan
+        `LOCKED` atau sudah lewat `expiresAt`, mengembalikan 400 (reservasi
+        yang lewat tempo diubah menjadi `EXPIRED`).
+      security:
+        - bearerAuth: []
+        - serviceToken: []
       parameters:
         - $ref: "#/components/parameters/ReservationId"
       responses:
@@ -118,11 +206,24 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Reservasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/v1/reservations/{id}/cancel:
     post:
       tags: [Reservations]
       operationId: cancelReservation
       summary: Batalkan reservasi (-> CANCELLED)
+      description: |
+        Melepas lock: kursi/tiket kembali tersedia. Kursi yang lewat tempo juga
+        bebas dibaca ulang oleh feed ketersediaan (status `EXPIRED` tidak lagi
+        dihitung).
+      security:
+        - bearerAuth: []
+        - serviceToken: []
       parameters:
         - $ref: "#/components/parameters/ReservationId"
       responses:
@@ -138,15 +239,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Reservasi tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
   /api/v1/events/{eventId}/seat-status:
     get:
-      tags: [SeatStatus]
+      tags: [Availability]
       operationId: getEventSeatStatus
-      summary: Kursi terkunci/terjual untuk satu event
+      summary: Kursi terkunci/terjual untuk satu event (service-to-service)
       description: |
         Hanya kursi dari reservasi berstatus `LOCKED` (masih berlaku) atau
         `CONFIRMED`. Dipakai catalog-service untuk menentukan
-        `available | locked | sold`.
+        `available | locked | sold`. Butuh `X-Service-Token`.
+      security:
+        - serviceToken: []
       parameters:
         - name: eventId
           in: path
@@ -168,7 +277,67 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid `X-Service-Token`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /api/v1/events/{eventId}/ticket-status:
+    get:
+      tags: [Availability]
+      operationId: getEventTicketStatus
+      summary: Jumlah tiket terkunci/terjual per tier (service-to-service)
+      description: |
+        Menjumlahkan `reservation_items.quantity` untuk reservasi `LOCKED`
+        (masih berlaku) atau `CONFIRMED`, dikelompokkan per `categoryId`.
+        Dipakai catalog-service menghitung `remaining` pada
+        `GET /events/{id}/ticket-types`. Butuh `X-Service-Token`.
+      security:
+        - serviceToken: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Event ID (UUID).
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Jumlah tiket terkunci/terjual per tier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketStatusListResponse"
+        "400":
+          description: '`eventId` bukan UUID valid'
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Tanpa/invalid `X-Service-Token`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token JWT (HS256) hasil `POST /api/v1/auth/login` dsb.
+        Pemilik reservasi ditentukan oleh subject token.
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Service-Token
+      description: |
+        Token internal bersama antar-service (env `SERVICE_TOKEN`).
+        Dihapus gateway untuk trafik publik — hanya dipakai service-to-service.
   parameters:
     ReservationId:
       name: id
@@ -197,25 +366,44 @@ components:
           type: string
     CreateReservationRequest:
       type: object
-      required: [userId, eventId, seats]
+      required: [eventId]
       properties:
         userId:
           type: string
           format: uuid
-          description: Pemilik reservasi (dari session JWT di web-portal).
+          description: |
+            DIABAIKAN (kompatibilitas mundur). Pemilik diambil dari
+            `Authorization: Bearer <access token>`.
         eventId:
           type: string
           format: uuid
+        mode:
+          type: string
+          maxLength: 10
+          enum: [SEATED, TIER]
+          description: |
+            Opsional. Kosong = disimpulkan dari isi (`items` → TIER, selain itu
+            SEATED). Bila diisi, wajib cocok dengan isi payload: `SEATED`
+            butuh `seats`, `TIER` butuh `items`.
+          example: TIER
+        seats:
+          type: array
+          description: Baris kursi (wajib untuk mode SEATED, kosong untuk TIER).
+          items:
+            $ref: "#/components/schemas/SeatItemRequest"
+        items:
+          type: array
+          description: |
+            Baris tiket (wajib untuk mode TIER, kosong untuk SEATED).
+            Baris dengan `categoryId` sama otomatis digabung; total kuantitas
+            maksimal 10 per reservasi.
+          items:
+            $ref: "#/components/schemas/TicketItemRequest"
         currency:
           type: string
           description: Kosong = `IDR`.
           default: IDR
           example: IDR
-        seats:
-          type: array
-          minItems: 1
-          items:
-            $ref: "#/components/schemas/SeatItemRequest"
     SeatItemRequest:
       type: object
       required: [seatId, section, row, number, price]
@@ -234,6 +422,30 @@ components:
         price:
           type: number
           format: double
+          description: |
+            Harga yang dirender klien (informatif untuk mode SEATED).
+            Untuk TIER, harga SELALU dari catalog-service.
+    TicketItemRequest:
+      type: object
+      required: [categoryId, quantity]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+          description: Tier/kategori tiket (dari `GET /events/{id}/ticket-types`).
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 10
+          example: 2
+    ReservationListResponse:
+      type: object
+      required: [reservations]
+      properties:
+        reservations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReservationResponse"
     ReservationResponse:
       type: object
       required:
@@ -242,10 +454,12 @@ components:
         - eventId
         - bookingRef
         - status
+        - mode
         - expiresAt
         - totalAmount
         - currency
         - seats
+        - items
         - createdAt
       properties:
         reservationId:
@@ -263,19 +477,32 @@ components:
         status:
           type: string
           enum: [LOCKED, CONFIRMED, EXPIRED, CANCELLED]
+        mode:
+          type: string
+          enum: [SEATED, TIER]
+          description: |
+            SEATED → `seats` terisi, `items` kosong. TIER → `items` terisi,
+            `seats` kosong. Nilai lama yang kosong dibaca sebagai `SEATED`.
         expiresAt:
           type: string
           format: date-time
         totalAmount:
           type: number
           format: double
+          description: Jumlah yang harus dibayar (server menghitung dari harga katalog).
         currency:
           type: string
           example: IDR
         seats:
           type: array
+          description: Kursi terkunci (mode SEATED).
           items:
             $ref: "#/components/schemas/SeatItemResponse"
+        items:
+          type: array
+          description: Tiket terkunci per tier (mode TIER).
+          items:
+            $ref: "#/components/schemas/TicketItemResponse"
         createdAt:
           type: string
           format: date-time
@@ -295,6 +522,28 @@ components:
         price:
           type: number
           format: double
+    TicketItemResponse:
+      type: object
+      required: [categoryId, categoryName, quantity, unitPrice, subtotal]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        categoryName:
+          type: string
+          example: VIP
+        quantity:
+          type: integer
+          example: 2
+        unitPrice:
+          type: number
+          format: double
+          description: Harga per tiket menurut catalog-service.
+          example: 750000
+        subtotal:
+          type: number
+          format: double
+          example: 1500000
     SeatStatusListResponse:
       type: object
       required: [seats]
@@ -314,3 +563,22 @@ components:
           type: string
           description: Status reservasi pemilik kursi (`LOCKED` atau `CONFIRMED`).
           enum: [LOCKED, CONFIRMED]
+    TicketStatusListResponse:
+      type: object
+      required: [tickets]
+      properties:
+        tickets:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketStatusResponse"
+    TicketStatusResponse:
+      type: object
+      required: [categoryId, reserved]
+      properties:
+        categoryId:
+          type: string
+          format: uuid
+        reserved:
+          type: integer
+          description: Jumlah tiket tier ini yang terkunci/terjual.
+          example: 108

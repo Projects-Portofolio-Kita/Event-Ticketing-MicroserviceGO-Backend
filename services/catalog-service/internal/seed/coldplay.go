@@ -38,24 +38,36 @@ var categorySeeds = []categorySeed{
 
 var rowNames = []string{"A", "B", "C", "D"}
 
-// Run inserts the Coldplay event, its seat categories and seats on first boot.
+// Run inserts the Coldplay event, its seat categories and seats on first boot,
+// then makes sure every demo event exists (idempotent by code).
 func Run(db *gorm.DB) error {
 	var count int64
 	if err := db.Model(&model.Event{}).Count(&count).Error; err != nil {
 		return err
 	}
-	if count > 0 {
-		return nil
+
+	if count == 0 {
+		log.Println("[seed] inserting event Coldplay 2026 + kategori + kursi")
+		if err := insertColdplay(db); err != nil {
+			return err
+		}
 	}
 
-	log.Println("[seed] inserting event Coldplay 2026 + kategori + kursi")
+	return insertDemoEvents(db)
+}
+
+func insertColdplay(db *gorm.DB) error {
 
 	event := &model.Event{
-		ID:        coldplayEventID,
-		Code:      "coldplay-2026",
-		Name:      "Coldplay 2026 - Music of the Spheres",
-		Venue:     "Stadion Utama Gelora Bung Karno",
-		EventDate: time.Date(2026, 6, 15, 19, 30, 0, 0, time.UTC),
+		ID:          coldplayEventID,
+		Code:        "coldplay-2026",
+		Name:        "Coldplay 2026 - Music of the Spheres",
+		Venue:       "Stadion Utama Gelora Bung Karno",
+		EventDate:   time.Date(2026, 6, 15, 19, 30, 0, 0, time.UTC),
+		City:        "Jakarta",
+		Category:    model.EventCategoryConcert,
+		Description: "Tur dunia Music of the Spheres dengan setlist penuh di GBK Jakarta.",
+		SaleMode:    model.SaleModeSeated,
 	}
 
 	return db.Transaction(func(tx *gorm.DB) error {

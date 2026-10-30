@@ -97,6 +97,19 @@ func (f *fakeUserStore) RevokeRefreshToken(id uuid.UUID) error {
 	return nil
 }
 
+func (f *fakeUserStore) UpdateUser(user *model.User) error {
+	for i, existing := range f.users {
+		if existing.ID == user.ID {
+			stored := *user
+			stored.UpdatedAt = time.Now()
+			f.users[i] = &stored
+			*user = stored
+			return nil
+		}
+	}
+	return gorm.ErrRecordNotFound
+}
+
 // newTestService builds a service over the fake store. The Google client ID is
 // left empty so no code path can reach the network.
 func newTestService() (*AuthService, *fakeUserStore, *authjwt.Manager) {
@@ -107,7 +120,7 @@ func newTestService() (*AuthService, *fakeUserStore, *authjwt.Manager) {
 
 func mustRegister(t *testing.T, svc *AuthService, name, email, password string) dto.SessionResponse {
 	t.Helper()
-	session, err := svc.Register(name, email, password)
+	session, err := svc.Register(name, email, password, false)
 	if err != nil {
 		t.Fatalf("Register(%q): %v", email, err)
 	}
@@ -158,9 +171,28 @@ func TestRegisterRejectsDuplicateEmail(t *testing.T) {
 	mustRegister(t, svc, "Alice", "alice@example.com", "secret1")
 
 	// Case and whitespace must not bypass the unique check.
-	_, err := svc.Register("Alice 2", "  ALICE@example.com ", "secret2")
+	_, err := svc.Register("Alice 2", "  ALICE@example.com ", "secret2", false)
 	if !errors.Is(err, repository.ErrDuplicateEmail) {
 		t.Fatalf("Register duplicate = %v, want ErrDuplicateEmail", err)
+	}
+}
+
+func TestRegisterPersistsCanPostEventFlag(t *testing.T) {
+	svc, store, _ := newTestService()
+
+	session, err := svc.Register("Poster", "poster@example.com", "secret1", true)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	if !session.User.CanPostEvent {
+		t.Fatal("session user canPostEvent = false, want true")
+	}
+	if len(store.users) != 1 {
+		t.Fatalf("stored users = %d, want 1", len(store.users))
+	}
+	if !store.users[0].CanPostEvent {
+		t.Fatal("stored user canPostEvent = false, want true")
 	}
 }
 
@@ -293,5 +325,106 @@ func TestLoginWithGoogleWithoutClientID(t *testing.T) {
 
 	if _, err := svc.LoginWithGoogle("some-google-id-token"); !errors.Is(err, ErrGoogleNotConfigured) {
 		t.Fatalf("LoginWithGoogle = %v, want ErrGoogleNotConfigured", err)
+	}
+}
+
+// --- profile (PATCH /me) ----------------------------------------------------
+
+func strptr(s string) *string { return &s }
+
+func TestUpdateProfileChangesNameAndAvatar(t *testing.T) {
+	svc, store, _ := newTestService()
+	mustRegister(t, svc, "Alice", "alice@example.com", "secret1")
+
+	user, err := svc.UpdateProfile(store.users[0].ID, "  Alice Tan  ", strptr("https://cdn.example.com/a.png"))
+	if err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+
+	if user.Name != "Alice Tan" {
+		t.Errorf("name = %q, want the trimmed Alice Tan", user.Name)
+	}
+	if user.AvatarURL != "https://cdn.example.com/a.png" {
+		t.Errorf("avatar = %q, want the new URL", user.AvatarURL)
+	}
+	if user.Email != "alice@example.com" {
+		t.Errorf("email changed to %q — profile edits must not touch it", user.Email)
+	}
+	// The change is persisted for the next /me read.
+	fresh, err := svc.Me(store.users[0].ID)
+	if err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if fresh.Name != "Alice Tan" {
+		t.Errorf("stored name = %q, want Alice Tan", fresh.Name)
+	}
+}
+
+func TestUpdateProfileAvatarSemantics(t *testing.T) {
+	svc, store, _ := newTestService()
+	mustRegister(t, svc, "Alice", "alice@example.com", "secret1")
+	userID := store.users[0].ID
+
+	// Seed an avatar first.
+	if _, err := svc.UpdateProfile(userID, "Alice", strptr("https://cdn.example.com/a.png")); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	t.Run("omitted avatar is left untouched", func(t *testing.T) {
+		user, err := svc.UpdateProfile(userID, "Alice", nil)
+		if err != nil {
+			t.Fatalf("UpdateProfile: %v", err)
+		}
+		if user.AvatarURL != "https://cdn.example.com/a.png" {
+			t.Errorf("avatar = %q, want it unchanged", user.AvatarURL)
+		}
+	})
+
+	t.Run("empty avatar clears it", func(t *testing.T) {
+		user, err := svc.UpdateProfile(userID, "Alice", strptr("   "))
+		if err != nil {
+			t.Fatalf("UpdateProfile: %v", err)
+		}
+		if user.AvatarURL != "" {
+			t.Errorf("avatar = %q, want it cleared for the initials fallback", user.AvatarURL)
+		}
+	})
+}
+
+func TestUpdateProfileRejectsBadInput(t *testing.T) {
+	svc, store, _ := newTestService()
+	mustRegister(t, svc, "Alice", "alice@example.com", "secret1")
+	userID := store.users[0].ID
+
+	for name, tc := range map[string]struct {
+		name   string
+		avatar *string
+	}{
+		"blank name":       {name: "   ", avatar: nil},
+		"oversized name":   {name: strings.Repeat("a", 101), avatar: nil},
+		"avatar not http":  {name: "Alice", avatar: strptr("ftp://cdn.example.com/a.png")},
+		"oversized avatar": {name: "Alice", avatar: strptr("https://cdn.example.com/" + strings.Repeat("a", 600))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := svc.UpdateProfile(userID, tc.name, tc.avatar); !errors.Is(err, ErrInvalidProfile) {
+				t.Errorf("err = %v, want ErrInvalidProfile", err)
+			}
+			// The stored profile must be untouched.
+			user, err := svc.Me(userID)
+			if err != nil {
+				t.Fatalf("Me: %v", err)
+			}
+			if user.Name != "Alice" {
+				t.Errorf("name = %q, want the original Alice", user.Name)
+			}
+		})
+	}
+}
+
+func TestUpdateProfileUnknownUser(t *testing.T) {
+	svc, _, _ := newTestService()
+
+	if _, err := svc.UpdateProfile(uuid.New(), "Ghost", nil); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("err = %v, want ErrUserNotFound", err)
 	}
 }

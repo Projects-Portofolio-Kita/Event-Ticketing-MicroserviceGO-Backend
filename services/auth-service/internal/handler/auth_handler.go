@@ -30,7 +30,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		errorMessage(c, http.StatusBadRequest, "Data pendaftaran tidak valid: "+err.Error())
 		return
 	}
-	session, err := h.service.Register(req.Name, req.Email, req.Password)
+	session, err := h.service.Register(req.Name, req.Email, req.Password, req.CanPostEvent)
 	if err != nil {
 		if errors.Is(err, repository.ErrDuplicateEmail) {
 			errorMessage(c, http.StatusConflict, "Email sudah terdaftar. Silakan masuk.")
@@ -98,14 +98,20 @@ func (h *AuthHandler) Google(c *gin.Context) {
 	c.JSON(http.StatusOK, session)
 }
 
-// GET /api/v1/auth/me (requires Bearer access token)
-func (h *AuthHandler) Me(c *gin.Context) {
+// currentUserID reads the principal the auth middleware put on the context.
+// Every handler below is mounted behind RequireAuth, so it is always set.
+func currentUserID(c *gin.Context) (uuid.UUID, bool) {
 	raw, ok := c.Get("userID")
 	if !ok {
-		errorMessage(c, http.StatusUnauthorized, "Sesi tidak valid. Silakan masuk ulang.")
-		return
+		return uuid.Nil, false
 	}
 	userID, ok := raw.(uuid.UUID)
+	return userID, ok
+}
+
+// GET /api/v1/auth/me (requires Bearer access token)
+func (h *AuthHandler) Me(c *gin.Context) {
+	userID, ok := currentUserID(c)
 	if !ok {
 		errorMessage(c, http.StatusUnauthorized, "Sesi tidak valid. Silakan masuk ulang.")
 		return
@@ -115,5 +121,35 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		errorMessage(c, http.StatusUnauthorized, "Akun tidak ditemukan. Silakan masuk ulang.")
 		return
 	}
+	c.JSON(http.StatusOK, gin.H{"user": user.Public()})
+}
+
+// PATCH /api/v1/auth/me (requires Bearer access token) — edit name / avatar.
+func (h *AuthHandler) UpdateMe(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		errorMessage(c, http.StatusUnauthorized, "Sesi tidak valid. Silakan masuk ulang.")
+		return
+	}
+
+	var req dto.UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorMessage(c, http.StatusBadRequest, "Data profil tidak valid: "+err.Error())
+		return
+	}
+
+	user, err := h.service.UpdateProfile(userID, req.Name, req.Avatar)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidProfile):
+			errorMessage(c, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrUserNotFound):
+			errorMessage(c, http.StatusUnauthorized, "Akun tidak ditemukan. Silakan masuk ulang.")
+		default:
+			errorMessage(c, http.StatusInternalServerError, "Memperbarui profil gagal. Silakan coba lagi.")
+		}
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{"user": user.Public()})
 }

@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/authz"
 	"github.com/Projects-Portofolio-Kita/Event-Ticketing-MicroserviceGO-Backend/libs/common/cors"
@@ -36,7 +37,19 @@ func main() {
 
 	paymentRepository := repository.NewPaymentRepository(db)
 
-	qrisProvider := provider.NewMockQRISProvider()
+	providerMode := strings.ToLower(strings.TrimSpace(os.Getenv("PAYMENT_PROVIDER")))
+	var qrisProvider provider.QRISProvider
+	if providerMode == "midtrans" {
+		qrisProvider = provider.NewMidtransQRISProvider(
+			os.Getenv("MIDTRANS_SERVER_KEY"),
+			strings.EqualFold(os.Getenv("MIDTRANS_IS_PRODUCTION"), "true"),
+			os.Getenv("MIDTRANS_QRIS_ACQUIRER"),
+		)
+		log.Println("Payment provider: MIDTRANS QRIS")
+	} else {
+		qrisProvider = provider.NewMockQRISProvider()
+		log.Println("Payment provider: MOCK QRIS")
+	}
 
 	bookingClient := service.NewHTTPBookingClient()
 

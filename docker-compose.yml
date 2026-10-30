@@ -45,6 +45,8 @@ services:
       BOOKING_SERVICE_URL: "http://booking-service:8083"
       # Lets catalog call booking-service's seat-status feed (X-Service-Token).
       SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
+      # Verifies user access tokens for POST /events (posting an event).
+      JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
     depends_on:
       postgres:
         condition: service_healthy
@@ -67,12 +69,17 @@ services:
       JWT_SECRET: "dev-only-insecure-secret-change-in-production-0123456789abcdef"
       # Lets payment-service confirm a reservation (X-Service-Token).
       SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
+      # Tier bookings read names, prices and quotas from catalog-service.
+      CATALOG_SERVICE_URL: "http://catalog-service:8082"
       # Empty disables notifications (fire-and-forget, never blocks a booking).
       NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
     depends_on:
       postgres:
         condition: service_healthy
       notification-service:
+        condition: service_started
+      # Tier reservations read prices/quotas from catalog-service at checkout.
+      catalog-service:
         condition: service_started
     networks:
       - app-network
@@ -95,6 +102,11 @@ services:
       SERVICE_TOKEN: "dev-only-internal-service-token-change-in-production-9f3a7c21"
       BOOKING_SERVICE_URL: "http://booking-service:8083"
       NOTIFICATION_SERVICE_URL: "http://notification-service:8085"
+      # Provider: mock (default) or midtrans.
+      PAYMENT_PROVIDER: "mock"
+      MIDTRANS_SERVER_KEY: ""
+      MIDTRANS_IS_PRODUCTION: "false"
+      MIDTRANS_QRIS_ACQUIRER: "gopay"
     depends_on:
       postgres:
         condition: service_healthy

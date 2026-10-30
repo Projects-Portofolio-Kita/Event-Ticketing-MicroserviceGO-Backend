@@ -3,7 +3,7 @@ info:
   title: TickId Payment Service API
   version: 1.0.0
   description: |
-    Kontrak API payment-service (Go + Gin, port 8084) — pembayaran QRIS (mock provider).
+    Kontrak API payment-service (Go + Gin, port 8084) — pembayaran QRIS.
 
     Sumber kebenaran: `services/payment-service/cmd/server/main.go` (route),
     `internal/dto/payment_request.go`, `internal/handler/payment_handler.go`,
@@ -16,7 +16,10 @@ info:
       juga snake_case — berbeda dari auth/booking yang memakai camelCase.
     - Error memakai `{"message": string}` — sama dengan service lain,
       lewat `libs/common/httperr` (dulu `{"error": string}`, sudah diseragamkan).
-    - `payment_method` harus `QRIS` (case-insensitive) — provider saat ini mock.
+    - `payment_method` harus `QRIS` (case-insensitive).
+    - Provider dapat dipilih via env:
+      - `PAYMENT_PROVIDER=mock` (default)
+      - `PAYMENT_PROVIDER=midtrans` + `MIDTRANS_SERVER_KEY`
     - `POST /payments/{id}/confirm` memanggil
       `POST {booking-service}/api/v1/reservations/{id}/confirm` via HTTP
       (belum ada message broker; lihat `contracts/events/`).
@@ -141,7 +144,7 @@ components:
     ErrorResponse:
       type: object
       required: [message]
-      description: 'Envelope error bersama (`libs/common/httperr`), sama dengan service lain.'
+      description: "Envelope error bersama (`libs/common/httperr`), sama dengan service lain."
       properties:
         message:
           type: string
@@ -159,7 +162,17 @@ components:
           example: QRIS
     PaymentResponse:
       type: object
-      required: [id, reservation_id, qr_string, qr_url, status, amount, currency, expired_at]
+      required:
+        [
+          id,
+          reservation_id,
+          qr_string,
+          qr_url,
+          status,
+          amount,
+          currency,
+          expired_at,
+        ]
       properties:
         id:
           type: string

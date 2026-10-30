@@ -22,7 +22,9 @@ import (
 func main() {
 	// The seat availability feed it reads from booking-service is
 	// service-to-service only, so catalog cannot start without the token.
-	authz.RequireEnv("SERVICE_TOKEN")
+	serviceToken := authz.RequireEnv("SERVICE_TOKEN")
+	// Posting events requires verifying user access tokens.
+	jwtSecret := authz.RequireEnv("JWT_SECRET")
 
 	db, err := database.NewConnection()
 	if err != nil {
@@ -56,7 +58,17 @@ func main() {
 	api := router.Group("/api/v1")
 	{
 		api.GET("/events", catalogHandler.ListEvents)
+		// Any signed-in user may post an event (single-account model, no roles).
+		api.POST("/events", authz.RequireUser(jwtSecret), catalogHandler.CreateEvent)
+		// Static path before /:id — gin matches the literal route first.
+		api.GET("/events/cities", catalogHandler.ListCities)
+		api.GET("/events/:id", catalogHandler.GetEvent)
 		api.GET("/events/:id/seatmap", catalogHandler.GetSeatMap)
+		// Public tier availability for TIER events.
+		api.GET("/events/:id/ticket-types", catalogHandler.GetTicketTypes)
+		// Internal stock feed read by booking-service when it validates a
+		// tier reservation (X-Service-Token, never reachable from the gateway).
+		api.GET("/events/:id/tier-quotas", authz.RequireService(serviceToken), catalogHandler.GetTierQuotas)
 	}
 
 	port := os.Getenv("SERVER_PORT")
