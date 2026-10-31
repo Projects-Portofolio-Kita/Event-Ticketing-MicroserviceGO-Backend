@@ -1,3 +1,7 @@
+// Package config handles environment variable loading and defaults for user-service.
+//
+// File: config.go
+// Usability: Loads user-service database URLs, server ports, and JWT expiration configs.
 package config
 
 import (
@@ -17,7 +21,6 @@ type Config struct {
 }
 
 func LoadConfig() *Config {
-	// Try loading .env file (if exists, ignore error in production container)
 	if err := godotenv.Load(); err != nil {
 		log.Println("[Config] Notice: No .env file found or failed to load, reading from environment")
 	}
@@ -27,14 +30,10 @@ func LoadConfig() *Config {
 	jwtSecret := getEnv("JWT_SECRET", "default_jwt_secret_change_me_in_production_32char")
 
 	jwtExpMin, err := strconv.Atoi(getEnv("JWT_EXPIRATION_MINUTES", "15"))
-	if err != nil {
-		jwtExpMin = 15
-	}
+	if err != nil { jwtExpMin = 15 }
 
 	refreshExpDays, err := strconv.Atoi(getEnv("REFRESH_TOKEN_EXPIRATION_DAYS", "7"))
-	if err != nil {
-		refreshExpDays = 7
-	}
+	if err != nil { refreshExpDays = 7 }
 
 	return &Config{
 		ServerPort:                 serverPort,
@@ -46,8 +45,6 @@ func LoadConfig() *Config {
 }
 
 func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists && value != "" {
-		return value
-	}
+	if value, exists := os.LookupEnv(key); exists && value != "" { return value }
 	return fallback
 }

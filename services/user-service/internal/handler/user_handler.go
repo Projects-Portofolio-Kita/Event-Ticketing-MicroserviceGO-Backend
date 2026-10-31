@@ -1,3 +1,7 @@
+// Package handler provides HTTP transport controllers for user profile endpoints.
+//
+// File: user_handler.go
+// Usability: Defines UserHandler struct, constructor, context user ID extraction, and GetProfile endpoint.
 package handler
 
 import (
@@ -9,84 +13,35 @@ import (
 	"github.com/google/uuid"
 )
 
+// UserHandler handles user profile HTTP requests.
 type UserHandler struct {
 	userService service.UserService
 }
 
+// NewUserHandler initializes a new UserHandler.
 func NewUserHandler(userService service.UserService) *UserHandler {
 	return &UserHandler{userService: userService}
 }
 
-func (h *UserHandler) GetProfile(c *gin.Context) {
-	userIDVal, exists := c.Get("user_id")
+func getUserIDFromContext(c *gin.Context) (uuid.UUID, bool) {
+	val, exists := c.Get("user_id")
 	if !exists {
 		c.JSON(http.StatusUnauthorized, dto.ErrorResponse("Unauthorized", "ERR_UNAUTHORIZED"))
+		return uuid.Nil, false
+	}
+	return val.(uuid.UUID), true
+}
+
+// GetProfile returns the authenticated user's profile.
+func (h *UserHandler) GetProfile(c *gin.Context) {
+	userID, ok := getUserIDFromContext(c)
+	if !ok {
 		return
 	}
-
-	userID := userIDVal.(uuid.UUID)
 	profile, err := h.userService.GetProfile(userID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, dto.ErrorResponse(err.Error(), "ERR_USER_NOT_FOUND"))
 		return
 	}
-
 	c.JSON(http.StatusOK, dto.SuccessResponse("Profile retrieved successfully", profile))
-}
-
-func (h *UserHandler) UpdateProfile(c *gin.Context) {
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse("Unauthorized", "ERR_UNAUTHORIZED"))
-		return
-	}
-
-	userID := userIDVal.(uuid.UUID)
-
-	var req dto.UpdateProfileRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error(), "ERR_BAD_REQUEST"))
-		return
-	}
-
-	updated, err := h.userService.UpdateProfile(userID, &req)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse(err.Error(), "ERR_UPDATE_FAILED"))
-		return
-	}
-
-	c.JSON(http.StatusOK, dto.SuccessResponse("Profile updated successfully", updated))
-}
-
-func (h *UserHandler) GetUserByID(c *gin.Context) {
-	idStr := c.Param("id")
-	targetID, err := uuid.Parse(idStr)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, dto.ErrorResponse("Invalid user ID format", "ERR_INVALID_UUID"))
-		return
-	}
-
-	user, err := h.userService.GetUserByID(targetID)
-	if err != nil {
-		c.JSON(http.StatusNotFound, dto.ErrorResponse(err.Error(), "ERR_USER_NOT_FOUND"))
-		return
-	}
-
-	c.JSON(http.StatusOK, dto.SuccessResponse("User found", user))
-}
-
-func (h *UserHandler) DeactivateAccount(c *gin.Context) {
-	userIDVal, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, dto.ErrorResponse("Unauthorized", "ERR_UNAUTHORIZED"))
-		return
-	}
-
-	userID := userIDVal.(uuid.UUID)
-	if err := h.userService.DeactivateAccount(userID); err != nil {
-		c.JSON(http.StatusInternalServerError, dto.ErrorResponse(err.Error(), "ERR_INTERNAL"))
-		return
-	}
-
-	c.JSON(http.StatusOK, dto.SuccessResponse("Account deactivated successfully", nil))
 }

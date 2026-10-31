@@ -1,3 +1,7 @@
+// Package service provides core business logic for user profiles and authentication.
+//
+// File: user_service.go
+// Usability: Defines UserService interface, struct, constructor, and user query operations (GetProfile, GetUserByID).
 package service
 
 import (
@@ -8,6 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
+// UserService defines user profile retrieval, mutation, and deactivation operations.
 type UserService interface {
 	GetProfile(userID uuid.UUID) (*dto.UserResponse, error)
 	UpdateProfile(userID uuid.UUID, req *dto.UpdateProfileRequest) (*dto.UserResponse, error)
@@ -20,73 +25,23 @@ type userService struct {
 	tokenRepo repository.TokenRepository
 }
 
+// NewUserService initializes a new UserService instance.
 func NewUserService(userRepo repository.UserRepository, tokenRepo repository.TokenRepository) UserService {
-	return &userService{
-		userRepo:  userRepo,
-		tokenRepo: tokenRepo,
-	}
+	return &userService{userRepo: userRepo, tokenRepo: tokenRepo}
 }
 
 func (s *userService) GetProfile(userID uuid.UUID) (*dto.UserResponse, error) {
 	user, err := s.userRepo.FindByID(userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, errors.New("user not found")
-	}
-
-	res := dto.ToUserResponse(user)
-	return &res, nil
-}
-
-func (s *userService) UpdateProfile(userID uuid.UUID, req *dto.UpdateProfileRequest) (*dto.UserResponse, error) {
-	user, err := s.userRepo.FindByID(userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, errors.New("user not found")
-	}
-
-	if req.FirstName != nil {
-		user.FirstName = *req.FirstName
-	}
-	if req.LastName != nil {
-		user.LastName = req.LastName
-	}
-	if req.Phone != nil {
-		user.Phone = req.Phone
-	}
-	if req.AvatarURL != nil {
-		user.AvatarURL = req.AvatarURL
-	}
-
-	if err := s.userRepo.Update(user); err != nil {
-		return nil, err
-	}
-
+	if err != nil { return nil, err }
+	if user == nil { return nil, errors.New("user not found") }
 	res := dto.ToUserResponse(user)
 	return &res, nil
 }
 
 func (s *userService) GetUserByID(id uuid.UUID) (*dto.UserResponse, error) {
 	user, err := s.userRepo.FindByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil {
-		return nil, errors.New("user not found")
-	}
-
+	if err != nil { return nil, err }
+	if user == nil { return nil, errors.New("user not found") }
 	res := dto.ToUserResponse(user)
 	return &res, nil
-}
-
-func (s *userService) DeactivateAccount(userID uuid.UUID) error {
-	if err := s.userRepo.Delete(userID); err != nil {
-		return err
-	}
-	_ = s.tokenRepo.RevokeAllByUserID(userID)
-	return nil
 }
