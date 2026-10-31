@@ -1,0 +1,28 @@
+================================================================================
+TICKID - PAYMENT EXPIRED / INCOMPLETE NOTIFICATION
+================================================================================
+
+Dear {{.CustomerName}},
+
+We were unable to complete the payment for your ticket reservation for {{.EventTitle}}.
+
+Your temporary reservation has expired and the held seats have been released
+back into public inventory.
+
+DETAILS:
+--------------------------------------------------------------------------------
+Booking Reference : {{.BookingRef}}
+Event             : {{.EventTitle}}
+Reason            : {{if .Reason}}{{.Reason}}{{else}}Payment expired before completion{{end}}
+{{if .ExpiredAt}}Expired At        : {{.ExpiredAt}}
+{{end}}Status            : EXPIRED (Seats Released)
+
+NEXT STEPS:
+--------------------------------------------------------------------------------
+If you still wish to attend, you may initiate a new booking if seats are
+still available:
+{{if .RebookURL}}{{.RebookURL}}{{else}}https://tickid.com/events{{end}}
+
+If you believe your card or e-wallet was debited, contact our support team at
+{{.SupportEmail}} with your Booking Reference: {{.BookingRef}}.
+================================================================================

@@ -1,0 +1,28 @@
+================================================================================
+TICKID - EVENT ADVISORY: {{.NoticeType}}
+================================================================================
+
+Dear {{if .CustomerName}}{{.CustomerName}}{{else}}Ticket Holder{{end}},
+
+Please read this important notice regarding {{.EventTitle}}.
+
+EVENT DETAILS:
+--------------------------------------------------------------------------------
+Event        : {{.EventTitle}}
+{{if .BookingRef}}Booking Ref  : {{.BookingRef}}
+{{end}}Notice Type  : {{.NoticeType}}
+
+REASON:
+--------------------------------------------------------------------------------
+{{if .Reason}}{{.Reason}}{{else}}Unforeseen operational change.{{end}}
+
+{{if .ScheduleUpdate}}SCHEDULE & VENUE UPDATE:
+--------------------------------------------------------------------------------
+{{.ScheduleUpdate}}
+
+{{end}}{{if .RefundInfo}}REFUND & RESOLUTION:
+--------------------------------------------------------------------------------
+{{.RefundInfo}}
+
+{{end}}Need assistance? Contact our team at {{.SupportEmail}}.
+================================================================================

@@ -1,0 +1,31 @@
+================================================================================
+TICKID - ORDER CONFIRMATION & E-TICKET DELIVERY
+================================================================================
+
+Dear {{.CustomerName}},
+
+Thank you for your purchase! Your reservation for {{.EventTitle}} is confirmed.
+
+BOOKING DETAILS:
+--------------------------------------------------------------------------------
+Booking Reference : {{.BookingRef}}
+Event             : {{.EventTitle}}
+Date & Time       : {{.EventDate}}
+Venue             : {{.VenueName}}{{if .VenueAddress}}, {{.VenueAddress}}{{end}}
+Ticket Tier       : {{.TierName}}
+Total Paid        : {{.TotalAmountFormatted}} {{.Currency}}
+
+SEATS RESERVED ({{len .Seats}}):
+--------------------------------------------------------------------------------
+{{range .Seats}}- Section: {{if .Section}}{{.Section}}{{else}}General{{end}} | Row: {{if .Row}}{{.Row}}{{else}}-{{end}} | Seat: {{.Number}}
+{{end}}
+--------------------------------------------------------------------------------
+ATTACHMENTS:
+Your official high-resolution E-Ticket PDF (ticket_{{.BookingRef}}.pdf) is
+attached to this email. It contains your entry QR code and gate instructions.
+
+Please have your QR code or printed ticket ready along with a valid ID
+at the venue entrance gate.
+
+Need assistance? Contact us at {{.SupportEmail}}
+================================================================================
