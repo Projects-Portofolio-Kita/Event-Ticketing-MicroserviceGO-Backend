@@ -1,5 +1,0 @@
-.env
-*.exe
-/server
-bin/
-coverage.out
