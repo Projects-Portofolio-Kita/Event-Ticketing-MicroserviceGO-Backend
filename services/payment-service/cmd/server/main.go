@@ -18,16 +18,16 @@ import (
 func main() {
 	db, err := database.NewConnection()
 	if err != nil {
-		log.Fatal(err)
-	}
-	if err := db.AutoMigrate(&model.Payment{}); err != nil {
-		log.Fatal(err)
+		log.Printf("[Warning] Failed to connect to database (%v)\n", err)
+	} else if err := db.AutoMigrate(&model.Payment{}); err != nil {
+		log.Printf("[Warning] Auto-migration failed: %v\n", err)
 	}
 
 	repo := repository.NewPaymentRepository(db)
 	qris := provider.NewMockQRISProvider()
-	booking := service.NewMockBookingClient()
-	svc := service.NewPaymentService(repo, qris, booking)
+	booking := service.NewHTTPBookingClient("")
+	notif := service.NewHTTPNotificationClient("")
+	svc := service.NewPaymentService(repo, qris, booking, notif)
 	h := handler.NewPaymentHandler(svc)
 
 	router := setupRouter(h)

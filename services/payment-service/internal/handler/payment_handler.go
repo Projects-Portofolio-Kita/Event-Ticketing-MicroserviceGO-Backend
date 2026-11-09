@@ -1,7 +1,7 @@
 // Package handler provides HTTP transport controllers for payment endpoints.
 //
 // File: payment_handler.go
-// Usability: Defines PaymentHandler struct, constructor, and CreatePayment endpoint handling.
+// Usability: Defines PaymentHandler struct, constructor, CreatePayment and ConfirmPayment endpoint handlers.
 package handler
 
 import (
@@ -43,5 +43,23 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 		"amount":         payment.Amount,
 		"currency":       payment.Currency,
 		"expired_at":     payment.ExpiredAt,
+	})
+}
+
+// ConfirmPayment handles HTTP POST requests to finalize payment and orchestrate reservation & ticket dispatch.
+func (h *PaymentHandler) ConfirmPayment(c *gin.Context) {
+	id := c.Param("id")
+	payment, err := h.service.ConfirmPayment(id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":             payment.ID,
+		"reservation_id": payment.ReservationID,
+		"status":         payment.Status,
+		"amount":         payment.Amount,
+		"currency":       payment.Currency,
+		"message":        "Payment confirmed, reservation finalized, and ticket confirmation queued.",
 	})
 }
